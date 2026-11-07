@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-VERSION = "4.2.0"
+VERSION = "4.3.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "triagem.db")
 LOG_PATH = os.path.join(BASE_DIR, "triagem.log")
@@ -61,6 +61,12 @@ def get_inactivity_seconds() -> int:
 def get_max_followups() -> int:
     load_dotenv(override=True)
     return int(os.getenv("MAX_FOLLOWUPS", "2"))
+
+
+def get_human_pause_seconds() -> int:
+    load_dotenv(override=True)
+    mins = float(os.getenv("HUMAN_PAUSE_MINUTES", "60"))
+    return max(60, int(mins * 60))
 
 
 # ==============================================================================
@@ -180,19 +186,19 @@ def detect_quote_or_exam_intent(text_lower: str) -> bool:
 
 
 # ==============================================================================
-# MENSAGENS PADRONIZADAS (TRIAGEM 24H — EXCLUSIVAMENTE PARTICULAR)
+# MENSAGENS PADRONIZADAS (SEM EMOJIS, LIMPAS E BEM ESPAÇADAS)
 # ==============================================================================
 BLOCO_OPCOES_MENU = (
-    "*1 - Exames na Unidade / Orçamento*\n"
-    "📍 Rua dos Miosótis, 55 - Sala 504 (Vila Valqueire)\n\n"
+    "*1 - Agendamentos / Orçamentos*\n"
+    "Unidade Vila Valqueire (Rua dos Miosótis, 55 - Sala 504)\n\n"
     "*2 - Coleta Domiciliar / Orçamento*\n"
-    "🏠 Atendimento no conforto da sua casa\n\n"
+    "Atendimento no endereço da sua residência\n\n"
     "*3 - Exame Toxicológico*\n"
-    "🚗 CNH / DETRAN / Concurso / CLT\n\n"
+    "CNH / DETRAN / Concurso / CLT\n\n"
     "*4 - Falar sobre um agendamento já realizado*\n"
-    "📅 Dúvidas ou remarcação de agendamento\n\n"
+    "Dúvidas ou remarcação de agendamento\n\n"
     "*5 - Falar diretamente com uma atendente*\n"
-    "👩‍⚕️ Atendimento com a nossa recepção"
+    "Atendimento direto com a nossa recepção"
 )
 
 MENSAGEM_MENU = (
@@ -222,14 +228,33 @@ MENSAGEM_AUDIO_DADOS_CADASTRAIS = (
     "(ou digite *5* caso prefira falar diretamente com a nossa recepcionista):"
 )
 
+MENSAGEM_TRANSBORDO_APOS_TENTATIVAS = (
+    "Recebemos a sua mensagem!\n\n"
+    "Como não conseguimos concluir o preenchimento automático por aqui, vamos seguir pelo caminho da *Opção 5 (Falar diretamente com uma atendente)*.\n\n"
+    "Uma de nossas recepcionistas já vai ouvir a sua mensagem e atender você por aqui em instantes!"
+)
+
 MENSAGEM_COTA_MODALIDADE = (
     "Olá! Seja bem-vindo(a) à *Saúdelab Exames Laboratoriais* (Vila Valqueire).\n\n"
     "Para prepararmos a cotação dos seus exames, onde você prefere realizar a coleta?\n"
     "Digite o *número* da opção:\n\n"
     "*1 - Na Unidade Vila Valqueire*\n"
-    "📍 Rua dos Miosótis, 55 - Sala 504\n\n"
+    "Rua dos Miosótis, 55 - Sala 504\n\n"
     "*2 - Coleta Domiciliar*\n"
-    "🏠 Vamos até o seu endereço"
+    "Vamos até o seu endereço"
+)
+
+MENSAGEM_PERGUNTA_TOX_CONCURSO = (
+    "Realizamos o *Exame Toxicológico* na nossa unidade em Vila Valqueire (Rua dos Miosótis, 55 - Sala 504).\n\n"
+    "O seu exame toxicológico é para *Concurso Público*?\n"
+    "Digite o *número* da opção:\n\n"
+    "*1 - Sim, é para Concurso Público*\n\n"
+    "*2 - Não (é para CNH / DETRAN / CLT / Outros)*"
+)
+
+MENSAGEM_QUAL_CONCURSO = (
+    "Certo! Para qual *concurso* é o seu Exame Toxicológico?\n"
+    "Por favor, escreva o nome do concurso abaixo:"
 )
 
 MENSAGEM_ENDERECO_DOMICILIAR = (
@@ -240,9 +265,9 @@ MENSAGEM_ENDERECO_DOMICILIAR = (
 MENSAGEM_PEDIR_EXAMES = (
     "Quais *exames* você precisa realizar?\n\n"
     "Você pode:\n"
-    "• Escrever os nomes dos exames\n"
-    "• Enviar a *foto do pedido médico*\n"
-    "• Ou mandar um *áudio* falando os exames"
+    "- Escrever os nomes dos exames\n"
+    "- Enviar a *foto do pedido médico*\n"
+    "- Ou mandar um *áudio* falando os exames"
 )
 
 MENSAGEM_PEDIR_NOME = (
@@ -298,6 +323,7 @@ def init_db() -> None:
                 state TEXT DEFAULT 'IDLE',
                 data_json TEXT DEFAULT '{}',
                 paused_for_human INTEGER DEFAULT 0,
+                paused_until_ts INTEGER DEFAULT 0,
                 whitelisted INTEGER DEFAULT 0,
                 followup_count INTEGER DEFAULT 0,
                 last_activity_ts INTEGER DEFAULT 0,
@@ -316,6 +342,10 @@ def init_db() -> None:
             );
             """
         )
+        # Garante coluna paused_until_ts em bancos já existentes
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(sessions);").fetchall()]
+        if "paused_until_ts" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN paused_until_ts INTEGER DEFAULT 0;")
         conn.commit()
 
 
@@ -327,10 +357,80 @@ def clean_phone(jid_or_phone: str) -> str:
     return f"{digits}@s.whatsapp.net" if digits else "desconhecido@s.whatsapp.net"
 
 
+def pause_session_for_human(conn: sqlite3.Connection, jid: str, now_ts: int, now_str: str, reason_log: str) -> None:
+    pause_until = now_ts + get_human_pause_seconds()
+    conn.execute(
+        """
+        INSERT INTO sessions (phone, state, data_json, paused_for_human, paused_until_ts, followup_count, last_activity_ts, updated_at)
+        VALUES (?, 'IDLE', '{}', 1, ?, 0, ?, ?)
+        ON CONFLICT(phone) DO UPDATE SET
+            state = 'IDLE',
+            data_json = '{}',
+            paused_for_human = 1,
+            paused_until_ts = excluded.paused_until_ts,
+            followup_count = 0,
+            last_activity_ts = excluded.last_activity_ts,
+            updated_at = excluded.updated_at
+        """,
+        (jid, pause_until, now_ts, now_str),
+    )
+    conn.commit()
+    log_event("PAUSA_HUMANA_1H", jid, reason_log)
+
+
+def is_currently_paused_for_human(conn: sqlite3.Connection, row: sqlite3.Row, now_ts: int, now_str: str) -> bool:
+    if int(row["paused_for_human"] or 0) == 0:
+        return False
+    paused_until = int(row["paused_until_ts"] or 0)
+    if paused_until > 0 and now_ts >= paused_until:
+        # Passou 1 hora desde que o humano assumiu -> libera o bot novamente
+        conn.execute(
+            """
+            UPDATE sessions
+            SET paused_for_human = 0, paused_until_ts = 0, state = 'IDLE', data_json = '{}', followup_count = 0, updated_at = ?
+            WHERE phone = ?
+            """,
+            (now_str, row["phone"]),
+        )
+        conn.commit()
+        log_event("PAUSA_1H_EXPIRADA", row["phone"], "Pausa de 1h expirou; bot reativado para este contato")
+        return False
+    return True
+
+
+def escalate_after_two_retries(
+    conn: sqlite3.Connection,
+    jid: str,
+    data: dict,
+    now_ts: int,
+    now_str: str,
+    first_try_reply: str,
+    log_label: str,
+) -> tuple[bool, str]:
+    """
+    Controla até 2 tentativas quando o cliente manda áudio em etapa de opção/cadastro ou digita opção inválida.
+    Na 1ª vez: retorna first_try_reply.
+    Na 2ª vez seguida: encerra o bot e transfere para a atendente (Opção 5) pausando por 1 hora.
+    """
+    retries = int(data.get("retry_count", 0)) + 1
+    data["retry_count"] = retries
+    if retries >= 2:
+        pause_session_for_human(
+            conn,
+            jid,
+            now_ts,
+            now_str,
+            f"2 tentativas sem sucesso ({log_label}) -> Encaminhado automaticamente para Opção 5 (Atendente)",
+        )
+        return True, MENSAGEM_TRANSBORDO_APOS_TENTATIVAS
+    return False, first_try_reply
+
+
 # ==============================================================================
 # MOTOR DE TRIAGEM E CHAMADAS PERDIDAS
 # ==============================================================================
 def handle_missed_call(phone: str) -> str | None:
+    init_db()
     jid = clean_phone(phone)
     now_ts = int(time.time())
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -340,8 +440,8 @@ def handle_missed_call(phone: str) -> str | None:
         if not row:
             conn.execute(
                 """
-                INSERT INTO sessions (phone, state, data_json, paused_for_human, whitelisted, followup_count, last_activity_ts, updated_at)
-                VALUES (?, 'IDLE', '{}', 0, 0, 0, ?, ?)
+                INSERT INTO sessions (phone, state, data_json, paused_for_human, paused_until_ts, whitelisted, followup_count, last_activity_ts, updated_at)
+                VALUES (?, 'IDLE', '{}', 0, 0, 0, 0, ?, ?)
                 """,
                 (jid, now_ts, now_str),
             )
@@ -350,13 +450,20 @@ def handle_missed_call(phone: str) -> str | None:
 
         if is_test_mode() and int(row["whitelisted"] or 0) == 0:
             return None
-        if row["paused_for_human"] == 1:
+
+        if is_currently_paused_for_human(conn, row, now_ts, now_str):
+            return None
+
+        # Evita reenviar o menu se o bot já acabou de enviar mensagem há menos de 45s
+        last_ts = int(row["last_activity_ts"] or 0)
+        if row["state"] != "IDLE" and (now_ts - last_ts) < 45:
+            log_event("CHAMADA_IGNORADA", jid, "Cliente já está com menu/triagem ativa nos últimos 45s")
             return None
 
         conn.execute(
             """
             UPDATE sessions
-            SET state = 'WAIT_MENU_OPTION', data_json = '{}', paused_for_human = 0,
+            SET state = 'WAIT_MENU_OPTION', data_json = '{}', paused_for_human = 0, paused_until_ts = 0,
                 followup_count = 0, last_activity_ts = ?, updated_at = ?
             WHERE phone = ?
             """,
@@ -368,6 +475,7 @@ def handle_missed_call(phone: str) -> str | None:
 
 
 def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool = False) -> str | None:
+    init_db()
     jid = clean_phone(phone)
     text = (text or "").strip()
     text_lower = text.lower()
@@ -389,24 +497,20 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
         if not row:
             conn.execute(
                 """
-                INSERT INTO sessions (phone, state, data_json, paused_for_human, whitelisted, followup_count, last_activity_ts, updated_at)
-                VALUES (?, 'IDLE', '{}', 0, 0, 0, ?, ?)
+                INSERT INTO sessions (phone, state, data_json, paused_for_human, paused_until_ts, whitelisted, followup_count, last_activity_ts, updated_at)
+                VALUES (?, 'IDLE', '{}', 0, 0, 0, 0, ?, ?)
                 """,
                 (jid, now_ts, now_str),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM sessions WHERE phone = ?", (jid,)).fetchone()
 
-        state = row["state"]
-        paused = row["paused_for_human"]
-        whitelisted = int(row["whitelisted"] or 0)
-
-        # Ativação explícita por #saudelab, #bot ou #reiniciar
-        if text_lower in (trigger, "#bot", "#reiniciar"):
+        # Ativação explícita por #saudelab, #bot, #reiniciar ou #reinicio
+        if text_lower in (trigger, "#bot", "#reiniciar", "#reinicio"):
             conn.execute(
                 """
                 UPDATE sessions
-                SET state = 'WAIT_MENU_OPTION', data_json = '{}', paused_for_human = 0,
+                SET state = 'WAIT_MENU_OPTION', data_json = '{}', paused_for_human = 0, paused_until_ts = 0,
                     whitelisted = 1, followup_count = 0, last_activity_ts = ?, updated_at = ?
                 WHERE phone = ?
                 """,
@@ -416,10 +520,13 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
             log_event("INICIO_SESSAO", jid, f"Ativado por comando '{text}'")
             return MENSAGEM_MENU
 
+        state = row["state"]
+        whitelisted = int(row["whitelisted"] or 0)
+
         if test_mode and state == "IDLE" and whitelisted == 0:
             return None
 
-        if paused == 1:
+        if is_currently_paused_for_human(conn, row, now_ts, now_str):
             return None
 
         data = json.loads(row["data_json"] or "{}")
@@ -450,19 +557,9 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
             log_event("RETORNO_MENU", jid, "Cliente digitou 0/menu")
             return MENSAGEM_MENU
 
-        # Permite digitar 5 em qualquer etapa para falar com a recepcionista
-        if text == "5" and state in ("WAIT_NAME", "WAIT_CPF_OR_BIRTH", "WAIT_MODALITY_AFTER_QUOTE"):
-            conn.execute(
-                """
-                UPDATE sessions
-                SET state = 'IDLE', data_json = '{}', paused_for_human = 1,
-                    followup_count = 0, last_activity_ts = ?, updated_at = ?
-                WHERE phone = ?
-                """,
-                (now_ts, now_str, jid),
-            )
-            conn.commit()
-            log_event("TRANSBORDO_HUMANO", jid, "Cliente digitou 5 para falar com atendente")
+        # Permite digitar 5 em qualquer etapa para falar com a recepcionista (pausa por 1h)
+        if text == "5" and state in ("WAIT_NAME", "WAIT_CPF_OR_BIRTH", "WAIT_MODALITY_AFTER_QUOTE", "WAIT_TOX_CONCURSO", "WAIT_TOX_WHICH_CONCURSO"):
+            pause_session_for_human(conn, jid, now_ts, now_str, "Cliente digitou 5 para falar com atendente")
             return (
                 "Certo. Uma de nossas recepcionistas já vai atender você por aqui em instantes. "
                 "Se desejar, já pode adiantar sua dúvida ou enviar a foto do seu pedido médico abaixo."
@@ -476,59 +573,63 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
         if state in ("IDLE", "START"):
             if is_audio:
                 state = "WAIT_MENU_OPTION"
-                log_event("AUDIO_INICIO", jid, "Cliente iniciou com áudio -> Enviada orientação + Menu")
+                data = {"retry_count": 1}
+                log_event("AUDIO_INICIO", jid, "Cliente iniciou com áudio (1/2) -> Enviada orientação + Menu")
                 reply = MENSAGEM_AUDIO_NO_MENU
             elif any(w in text_lower for w in ("toxicologico", "toxicológico", "detran", "cnh")):
                 data = {
                     "flow": "TRIAGEM_EXAMES",
                     "modality": "Exame Toxicológico (Unidade)",
                     "address": "Unidade (Rua dos Miosótis, 55 - Sala 504)",
-                    "exams": "Exame Toxicológico (CNH / DETRAN / CLT)",
+                    "retry_count": 0,
                 }
-                state = "WAIT_NAME"
+                state = "WAIT_TOX_CONCURSO"
                 log_event("INTENCAO_DIRETA", jid, f"Toxicológico detectado na abertura: '{text}'")
-                reply = (
-                    "Olá, seja bem-vindo(a) à Saúdelab Exames Laboratoriais (Vila Valqueire).\n"
-                    "Realizamos o Exame Toxicológico na nossa unidade (Rua dos Miosótis, 55 - Sala 504).\n\n"
-                    + MENSAGEM_PEDIR_NOME
-                )
+                reply = MENSAGEM_PERGUNTA_TOX_CONCURSO
             elif is_media:
-                data = {"flow": "TRIAGEM_EXAMES", "exams": text}
+                data = {"flow": "TRIAGEM_EXAMES", "exams": text, "retry_count": 0}
                 state = "WAIT_MODALITY_AFTER_QUOTE"
                 log_event("INTENCAO_FOTO_PEDIDO", jid, "Cliente enviou foto do pedido médico na abertura")
                 reply = MENSAGEM_COTA_MODALIDADE
             elif detect_quote_or_exam_intent(text_lower):
                 generic_phrases = ("quero fazer orcamento", "quero fazer orçamento", "orcamento", "orçamento", "cotacao", "cotação", "valor", "valores", "preco", "preço")
                 if text_lower not in generic_phrases and len(text) > 12:
-                    data = {"flow": "TRIAGEM_EXAMES", "exams": text}
+                    data = {"flow": "TRIAGEM_EXAMES", "exams": text, "retry_count": 0}
                 else:
-                    data = {"flow": "TRIAGEM_EXAMES"}
+                    data = {"flow": "TRIAGEM_EXAMES", "retry_count": 0}
                 state = "WAIT_MODALITY_AFTER_QUOTE"
                 log_event("INTENCAO_ORCAMENTO", jid, f"Solicitação de cotação detectada: '{text}'")
                 reply = MENSAGEM_COTA_MODALIDADE
             else:
                 state = "WAIT_MENU_OPTION"
+                data = {"retry_count": 0}
                 log_event("MENU_ENVIADO", jid, f"Mensagem recebida: '{text}'")
                 reply = MENSAGEM_MENU
 
         # ======================================================================
-        # ESTADO 2: MENU PRINCIPAL
+        # ESTADO 2: MENU PRINCIPAL (5 OPÇÕES)
         # ======================================================================
         elif state == "WAIT_MENU_OPTION":
             if is_audio:
-                log_event("AUDIO_NO_MENU", jid, "Cliente enviou áudio no menu -> Solicitado número da opção")
-                reply = MENSAGEM_AUDIO_NO_MENU
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, MENSAGEM_AUDIO_NO_MENU, "Áudio no menu"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
 
             elif text == "1" or "unidade" in text_lower:
                 data["flow"] = "TRIAGEM_EXAMES"
-                data["modality"] = "Exames na Unidade (Vila Valqueire)"
+                data["modality"] = "Agendamentos / Orçamentos (Unidade Vila Valqueire)"
                 data["address"] = "Unidade (Rua dos Miosótis, 55 - Sala 504)"
+                data["retry_count"] = 0
                 state = "WAIT_EXAMS"
                 reply = MENSAGEM_PEDIR_EXAMES
 
             elif text == "2" or "domiciliar" in text_lower or "casa" in text_lower:
                 data["flow"] = "TRIAGEM_EXAMES"
                 data["modality"] = "Coleta Domiciliar"
+                data["retry_count"] = 0
                 state = "WAIT_ADDRESS"
                 reply = MENSAGEM_ENDERECO_DOMICILIAR
 
@@ -536,33 +637,24 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                 data["flow"] = "TRIAGEM_EXAMES"
                 data["modality"] = "Exame Toxicológico (Unidade)"
                 data["address"] = "Unidade (Rua dos Miosótis, 55 - Sala 504)"
-                data["exams"] = "Exame Toxicológico (CNH / DETRAN / CLT)"
-                state = "WAIT_NAME"
-                reply = MENSAGEM_PEDIR_NOME
+                data["retry_count"] = 0
+                state = "WAIT_TOX_CONCURSO"
+                reply = MENSAGEM_PERGUNTA_TOX_CONCURSO
 
             elif text == "4" or any(w in text_lower for w in ("agendamento", "marcado", "remarcar")):
                 data["flow"] = "SUPORTE_AGENDAMENTO"
                 data["modality"] = "Falar sobre Agendamento Realizado"
                 data["address"] = "-"
                 data["exams"] = "Solicitação referente a agendamento existente"
+                data["retry_count"] = 0
                 state = "WAIT_NAME"
                 reply = (
                     "Certo, vamos localizar o seu agendamento.\n"
-                    "Por favor, informe o nome completo do(a) paciente:"
+                    "Por favor, informe o *nome completo* do(a) paciente:"
                 )
 
             elif text == "5" or "atendente" in text_lower or "recepcionista" in text_lower:
-                conn.execute(
-                    """
-                    UPDATE sessions
-                    SET state = 'IDLE', data_json = '{}', paused_for_human = 1,
-                        followup_count = 0, last_activity_ts = ?, updated_at = ?
-                    WHERE phone = ?
-                    """,
-                    (now_ts, now_str, jid),
-                )
-                conn.commit()
-                log_event("TRANSBORDO_HUMANO", jid, "Cliente escolheu opção 5 (Atendente)")
+                pause_session_for_human(conn, jid, now_ts, now_str, "Cliente escolheu opção 5 (Atendente)")
                 return (
                     "Certo. Uma de nossas recepcionistas já vai atender você por aqui em instantes. "
                     "Se desejar, já pode adiantar sua dúvida ou enviar a foto do seu pedido médico abaixo."
@@ -573,6 +665,7 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                 if is_media or (text_lower not in generic_phrases and len(text) > 10):
                     data["exams"] = text
                 data["flow"] = "TRIAGEM_EXAMES"
+                data["retry_count"] = 0
                 state = "WAIT_MODALITY_AFTER_QUOTE"
                 log_event("COTA_NO_MENU", jid, f"Cliente pediu cotação/exame direto no menu: '{text}'")
                 reply = (
@@ -580,29 +673,43 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                     "Onde você prefere realizar a coleta?\n"
                     "Digite o *número* da opção:\n\n"
                     "*1 - Na Unidade Vila Valqueire*\n"
-                    "📍 Rua dos Miosótis, 55 - Sala 504\n\n"
+                    "Rua dos Miosótis, 55 - Sala 504\n\n"
                     "*2 - Coleta Domiciliar*\n"
-                    "🏠 Vamos até o seu endereço"
+                    "Vamos até o seu endereço"
                 )
 
             else:
-                reply = (
+                fallback_menu = (
                     "Por favor, digite apenas o *número* de uma das opções abaixo (ou escreva os exames que deseja orçar):\n\n"
                     + BLOCO_OPCOES_MENU
                 )
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, fallback_menu, f"Opção inválida no menu: '{text}'"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
 
         # ======================================================================
         # ESTADO 2.1: MODALIDADE APÓS PEDIDO DIRETO DE COTAÇÃO
         # ======================================================================
         elif state == "WAIT_MODALITY_AFTER_QUOTE":
             if is_audio:
-                reply = (
-                    "Não consigo ouvir áudios nesta etapa. Por favor, digite 1 para realizar na Unidade Vila Valqueire ou 2 para Coleta Domiciliar "
-                    "(ou digite 5 para falar com a recepcionista):"
+                msg_try = (
+                    "Não consigo ouvir áudios nesta etapa.\n"
+                    "Por favor, digite *1* para realizar na Unidade Vila Valqueire ou *2* para Coleta Domiciliar "
+                    "(ou digite *5* para falar com a recepcionista):"
                 )
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, msg_try, "Áudio na escolha de modalidade"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
             elif text == "1" or "unidade" in text_lower:
-                data["modality"] = "Exames na Unidade (Vila Valqueire)"
+                data["modality"] = "Agendamentos / Orçamentos (Unidade Vila Valqueire)"
                 data["address"] = "Unidade (Rua dos Miosótis, 55 - Sala 504)"
+                data["retry_count"] = 0
                 if data.get("exams"):
                     state = "WAIT_NAME"
                     reply = MENSAGEM_PEDIR_NOME
@@ -611,16 +718,73 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                     reply = MENSAGEM_PEDIR_EXAMES
             elif text == "2" or "domiciliar" in text_lower or "casa" in text_lower:
                 data["modality"] = "Coleta Domiciliar"
+                data["retry_count"] = 0
                 state = "WAIT_ADDRESS"
                 reply = MENSAGEM_ENDERECO_DOMICILIAR
             else:
-                reply = "Por favor, digite 1 para realizar na Unidade Vila Valqueire ou 2 para Coleta Domiciliar:"
+                msg_try = "Por favor, digite *1* para realizar na Unidade Vila Valqueire ou *2* para Coleta Domiciliar:"
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, msg_try, f"Opção inválida na modalidade: '{text}'"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
 
         # ======================================================================
-        # ESTADO 2.2: ENDEREÇO DA COLETA DOMICILIAR
+        # ESTADO 2.2: EXAME TOXICOLÓGICO — É CONCURSO PÚBLICO?
+        # ======================================================================
+        elif state == "WAIT_TOX_CONCURSO":
+            if is_audio:
+                msg_try = (
+                    "Por favor, digite *1* se o Exame Toxicológico for para Concurso Público ou *2* se for para CNH / DETRAN / CLT:"
+                )
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, msg_try, "Áudio na pergunta de concurso toxicológico"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
+            elif text == "1" or text_lower in ("sim", "s", "concurso", "concurso publico", "concurso público"):
+                data["retry_count"] = 0
+                state = "WAIT_TOX_WHICH_CONCURSO"
+                reply = MENSAGEM_QUAL_CONCURSO
+            elif text == "2" or any(w in text_lower for w in ("nao", "não", "n", "cnh", "detran", "clt", "carteira", "motorista")):
+                data["exams"] = "Exame Toxicológico (CNH / DETRAN / CLT)"
+                data["retry_count"] = 0
+                state = "WAIT_NAME"
+                reply = MENSAGEM_PEDIR_NOME
+            elif "concurso" in text_lower and len(text) > 10:
+                # Cliente já respondeu dizendo qual é o concurso na mesma frase
+                data["exams"] = f"Exame Toxicológico — Concurso: {text}"
+                data["retry_count"] = 0
+                state = "WAIT_NAME"
+                reply = MENSAGEM_PEDIR_NOME
+            else:
+                msg_try = (
+                    "Por favor, digite *1* se for para Concurso Público ou *2* se não for (CNH / DETRAN / CLT):"
+                )
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, msg_try, f"Resposta inválida em WAIT_TOX_CONCURSO: '{text}'"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
+
+        # ======================================================================
+        # ESTADO 2.3: EXAME TOXICOLÓGICO — QUAL CONCURSO?
+        # ======================================================================
+        elif state == "WAIT_TOX_WHICH_CONCURSO":
+            data["exams"] = f"Exame Toxicológico — Concurso: {text}"
+            data["retry_count"] = 0
+            state = "WAIT_NAME"
+            reply = MENSAGEM_PEDIR_NOME
+
+        # ======================================================================
+        # ESTADO 2.4: ENDEREÇO DA COLETA DOMICILIAR
         # ======================================================================
         elif state == "WAIT_ADDRESS":
             data["address"] = text
+            data["retry_count"] = 0
             if is_audio:
                 log_event("AUDIO_ENDERECO", jid, "Cliente enviou o endereço por áudio")
             if data.get("exams"):
@@ -635,6 +799,7 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
         # ======================================================================
         elif state == "WAIT_EXAMS":
             data["exams"] = text
+            data["retry_count"] = 0
             if is_audio:
                 log_event("AUDIO_EXAMES", jid, "Cliente enviou os exames por áudio")
             state = "WAIT_NAME"
@@ -645,12 +810,23 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
         # ======================================================================
         elif state == "WAIT_NAME":
             if is_audio:
-                log_event("AUDIO_NO_NOME", jid, "Cliente mandou áudio no nome -> Solicitado texto")
-                reply = MENSAGEM_AUDIO_DADOS_CADASTRAIS
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, MENSAGEM_AUDIO_DADOS_CADASTRAIS, "Áudio na etapa de Nome"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
             elif len(text) < 3 or text.isdigit():
-                reply = "Por favor, informe o nome completo do(a) paciente por texto:"
+                msg_try = "Por favor, informe o *nome completo* do(a) paciente por texto:"
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, msg_try, f"Nome inválido: '{text}'"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
             else:
                 data["patient_name"] = text
+                data["retry_count"] = 0
                 state = "WAIT_CPF_OR_BIRTH"
                 reply = MENSAGEM_PEDIR_CPF_NASC
 
@@ -659,13 +835,22 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
         # ======================================================================
         elif state == "WAIT_CPF_OR_BIRTH":
             if is_audio:
-                log_event("AUDIO_NO_CPF", jid, "Cliente mandou áudio no CPF/Data -> Solicitado texto")
-                reply = MENSAGEM_AUDIO_DADOS_CADASTRAIS
+                escalated, msg_out = escalate_after_two_retries(
+                    conn, jid, data, now_ts, now_str, MENSAGEM_AUDIO_DADOS_CADASTRAIS, "Áudio na etapa de CPF/Data"
+                )
+                if escalated:
+                    return msg_out
+                reply = msg_out
             else:
                 is_valid, formatted_or_error = validate_cpf_or_birthdate(text)
                 if not is_valid:
                     log_event("CPF_DATA_INVALIDO", jid, f"Digitou '{text}' -> Solicitada correção")
-                    reply = formatted_or_error
+                    escalated, msg_out = escalate_after_two_retries(
+                        conn, jid, data, now_ts, now_str, formatted_or_error, f"CPF/Data inválido: '{text}'"
+                    )
+                    if escalated:
+                        return msg_out
+                    reply = msg_out
                 else:
                     data["cpf_or_birth"] = formatted_or_error
                     flow_type = data.get("flow", "TRIAGEM_EXAMES")
@@ -687,18 +872,13 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                     )
 
                     resumo = MENSAGEM_FINAL_AGENDAMENTO if flow_type == "SUPORTE_AGENDAMENTO" else MENSAGEM_FINAL_TRIAGEM
-
-                    conn.execute(
-                        """
-                        UPDATE sessions
-                        SET state = 'IDLE', data_json = '{}', paused_for_human = 1,
-                            followup_count = 0, last_activity_ts = ?, updated_at = ?
-                        WHERE phone = ?
-                        """,
-                        (now_ts, now_str, jid),
+                    pause_session_for_human(
+                        conn,
+                        jid,
+                        now_ts,
+                        now_str,
+                        f"Triagem concluída: {data.get('patient_name')} ({data.get('cpf_or_birth')})",
                     )
-                    conn.commit()
-                    log_event("TRIAGEM_CONCLUIDA", jid, f"Paciente: {data.get('patient_name')} ({data.get('cpf_or_birth')})")
                     return resumo
 
         conn.execute(
@@ -726,6 +906,11 @@ def check_inactive_sessions() -> list[dict]:
     outbound = []
 
     with get_db() as conn:
+        # Libera sessões cuja pausa humana de 1h já expirou
+        paused_rows = conn.execute("SELECT * FROM sessions WHERE paused_for_human = 1").fetchall()
+        for p_row in paused_rows:
+            is_currently_paused_for_human(conn, p_row, now_ts, now_str)
+
         active_rows = conn.execute(
             """
             SELECT * FROM sessions
@@ -758,7 +943,7 @@ def check_inactive_sessions() -> list[dict]:
                 conn.execute(
                     """
                     UPDATE sessions
-                    SET state = 'IDLE', data_json = '{}', paused_for_human = 0,
+                    SET state = 'IDLE', data_json = '{}', paused_for_human = 0, paused_until_ts = 0,
                         followup_count = 0, last_activity_ts = ?, updated_at = ?
                     WHERE phone = ?
                     """,
@@ -777,6 +962,7 @@ def check_inactive_sessions() -> list[dict]:
 # ==============================================================================
 @app.route("/api/message", methods=["POST"])
 def api_message():
+    init_db()
     d = request.json or {}
     jid = clean_phone(d.get("jid", ""))
     text = d.get("text", "")
@@ -788,25 +974,22 @@ def api_message():
     text_clean = (text or "").strip().lower()
 
     if from_me:
-        if text_clean in (trigger, "#bot", "#reiniciar"):
+        # Comandos explícitos de ativação/reinício do bot
+        if text_clean in (trigger, "#bot", "#reiniciar", "#reinicio"):
             reply = handle_message(jid, text, is_media=is_media, is_audio=is_audio)
             return jsonify({"reply": reply})
 
-        if is_test_mode():
-            return jsonify({"reply": None})
-
+        # Qualquer outra mensagem enviada pela atendente/aparelho aborta a triagem na hora por 1 hora!
+        now_ts = int(time.time())
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO sessions (phone, state, data_json, paused_for_human, updated_at)
-                VALUES (?, 'IDLE', '{}', 1, ?)
-                ON CONFLICT(phone) DO UPDATE SET paused_for_human = 1, updated_at = excluded.updated_at
-                """,
-                (jid, now_str),
+            pause_session_for_human(
+                conn,
+                jid,
+                now_ts,
+                now_str,
+                "Atendente assumiu a conversa -> Triagem abortada por 1 hora",
             )
-            conn.commit()
-        log_event("ATENDENTE_ASSUMIU", jid, "Mensagem enviada pela recepcionista; bot pausado neste contato")
         return jsonify({"reply": None})
 
     reply = handle_message(jid, text, is_media=is_media, is_audio=is_audio)
@@ -852,7 +1035,14 @@ def api_toggle_mode():
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
+    init_db()
+    now_ts = int(time.time())
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
+        paused_rows = conn.execute("SELECT * FROM sessions WHERE paused_for_human = 1").fetchall()
+        for p_row in paused_rows:
+            is_currently_paused_for_human(conn, p_row, now_ts, now_str)
+
         active = [
             dict(r)
             for r in conn.execute("SELECT * FROM sessions WHERE state != 'IDLE' OR paused_for_human = 1 ORDER BY updated_at DESC").fetchall()

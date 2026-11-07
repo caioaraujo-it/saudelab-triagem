@@ -8,7 +8,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const VERSION = '4.2.0';
+const VERSION = '4.3.0';
 const ENV_PATH = path.join(__dirname, '.env');
 const AUTH_DIR = path.join(__dirname, 'auth_whatsapp');
 const BOT_PY = path.join(__dirname, 'bot.py');
@@ -63,7 +63,34 @@ let latestQrDataUrl = null;
 let connectionStatus = 'INICIANDO...';
 let connectedPhone = '';
 const sentByBotIds = new Set();
+const recentBotTexts = new Map();
 const activeCalls = new Map();
+
+async function sendBotMessage(sock, targetJid, text) {
+    const cleanText = String(text || '').trim();
+    const sigKey = `${targetJid}:::${cleanText}`;
+    recentBotTexts.set(sigKey, Date.now());
+    const sent = await sock.sendMessage(targetJid, { text });
+    if (sent && sent.key && sent.key.id) {
+        sentByBotIds.add(sent.key.id);
+    }
+    return sent;
+}
+
+function isMessageFromBot(remoteJid, msgId, text) {
+    if (msgId && sentByBotIds.has(msgId)) {
+        sentByBotIds.delete(msgId);
+        return true;
+    }
+    const cleanText = String(text || '').trim();
+    const sigKey = `${remoteJid}:::${cleanText}`;
+    const ts = recentBotTexts.get(sigKey);
+    if (ts && (Date.now() - ts) < 25000) {
+        recentBotTexts.delete(sigKey);
+        return true;
+    }
+    return false;
+}
 
 function log(msg) {
     const ts = new Date().toLocaleTimeString('pt-BR');
@@ -1439,10 +1466,7 @@ async function runInactivityCheck() {
         for (const item of items) {
             if (!item.jid || !item.text) continue;
             const targetJid = item.jid.includes('@') ? item.jid : `${item.jid}@s.whatsapp.net`;
-            const sentMsg = await currentSocket.sendMessage(targetJid, { text: item.text });
-            if (sentMsg && sentMsg.key && sentMsg.key.id) {
-                sentByBotIds.add(sentMsg.key.id);
-            }
+            await sendBotMessage(currentSocket, targetJid, item.text);
             log(`[INATIVIDADE - ${item.attempt}] Enviado para ${targetJid}`);
         }
     } catch (err) {
@@ -1561,8 +1585,7 @@ async function startBot() {
                     log(`[CHAMADA NÃO ATENDIDA] Ligação perdida de ${callerJid} (${call.status}). Verificando envio da triagem...`);
                     const reply = await callPythonMissedCall(callerJid);
                     if (reply) {
-                        const sent = await sock.sendMessage(callerJid, { text: reply });
-                        if (sent?.key?.id) sentByBotIds.add(sent.key.id);
+                        await sendBotMessage(sock, callerJid, reply);
                         log(`Triagem enviada para chamada perdida de ${callerJid}`);
                     }
                 }
@@ -1571,16 +1594,24 @@ async function startBot() {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-
         for (const msg of messages) {
             try {
                 if (!msg.message) continue;
-
-                const msgId = msg.key.id;
-                if (sentByBotIds.has(msgId)) {
-                    sentByBotIds.delete(msgId);
+                // Ignora mensagens internas de protocolo/sincronização do WhatsApp
+                if (msg.message.protocolMessage || msg.message.historySyncNotification || msg.message.reactionMessage) {
                     continue;
+                }
+
+                const fromMe = Boolean(msg.key.fromMe);
+                if (type !== 'notify' && !fromMe) continue;
+
+                // Se veio como 'append' (ex: enviado pelo WhatsApp Web da recepção), garante que é uma mensagem recente (< 90s)
+                if (type !== 'notify' && fromMe) {
+                    const msgTsSec = Number(msg.messageTimestamp || 0);
+                    const nowSec = Math.floor(Date.now() / 1000);
+                    if (msgTsSec > 0 && Math.abs(nowSec - msgTsSec) > 90) {
+                        continue;
+                    }
                 }
 
                 const remoteJid = msg.key.remoteJid || '';
@@ -1588,16 +1619,21 @@ async function startBot() {
                     continue;
                 }
 
-                const fromMe = Boolean(msg.key.fromMe);
+                const msgId = msg.key.id;
                 const { text, isMedia, isAudio } = extractMessageContent(msg.message);
-                if (!text && !isMedia && !isAudio) continue;
 
-                const reply = await callPythonMessage(remoteJid, text, fromMe, isMedia, isAudio);
+                // Se a própria mensagem foi enviada pelo bot, ignora para não pausar a própria sessão
+                if (fromMe && isMessageFromBot(remoteJid, msgId, text)) {
+                    continue;
+                }
+
+                // Se foi a atendente humana que respondeu (mesmo figurinha/áudio/foto sem legenda), envia para pausar por 1h
+                const effectiveText = (fromMe && !text) ? '[Atendente assumiu a conversa]' : text;
+                if (!effectiveText && !isMedia && !isAudio) continue;
+
+                const reply = await callPythonMessage(remoteJid, effectiveText, fromMe, isMedia, isAudio);
                 if (reply) {
-                    const sent = await sock.sendMessage(remoteJid, { text: reply });
-                    if (sent && sent.key && sent.key.id) {
-                        sentByBotIds.add(sent.key.id);
-                    }
+                    await sendBotMessage(sock, remoteJid, reply);
                     log(`Respondido para ${remoteJid}`);
                 }
             } catch (err) {

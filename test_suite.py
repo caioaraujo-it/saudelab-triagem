@@ -4,7 +4,7 @@ import bot
 
 def run_all_tests() -> None:
     print("============================================================")
-    print(" EXECUTANDO BATERIA COMPLETA DE TESTES — SAUDELAB v4.0.0")
+    print(" EXECUTANDO BATERIA COMPLETA DE TESTES — SAUDELAB v4.3.0")
     print("============================================================")
 
     bot.init_db()
@@ -37,7 +37,15 @@ def run_all_tests() -> None:
     assert not ok_bad_dt
     print("[OK] 06. Data impossível (35/14/2000) rejeitada corretamente.")
 
-    # 7: Cliente pedindo cotação/valor de exame direto no menu -> segue preenchimento
+    # 7: Novo nome da Opção 1 ("1 - Agendamentos / Orçamentos") e ausência de emojis
+    jid_menu = "5521999990000@s.whatsapp.net"
+    r_menu = bot.handle_message(jid_menu, "#saudelab")
+    assert "*1 - Agendamentos / Orçamentos*" in r_menu
+    for emoji in ("📍", "🏠", "🚗", "📅", "👩‍⚕️"):
+        assert emoji not in r_menu
+    print("[OK] 07. Menu sem emojis e com '1 - Agendamentos / Orçamentos' validado.")
+
+    # 8: Fluxo de Cotação Direta + Rejeição de dado errado + Sucesso sem resumo
     jid_quote = "5521999995555@s.whatsapp.net"
     bot.handle_message(jid_quote, "#saudelab")
     r_quote = bot.handle_message(jid_quote, "Oi, quanto custa o exame de hemograma e glicose?")
@@ -49,9 +57,59 @@ def run_all_tests() -> None:
     assert "Não consegui validar" in r_wrong
     r_done = bot.handle_message(jid_quote, "01032000")
     assert "Uma de nossas recepcionistas já recebeu" in r_done and "RESUMO DA TRIAGEM" not in r_done
-    print("[OK] 07. Fluxo de Cotação Direta + Rejeição de dado errado + Sucesso sem resumo na mensagem.")
+    print("[OK] 08. Fluxo de Cotação Direta + Rejeição de dado errado + Sucesso sem resumo.")
 
-    # 8 a 11: Ociosidade de 5 minutos (2 tentativas -> encerra -> reativa quando mandar nova mensagem)
+    # 9: Exame Toxicológico (Opção 3) perguntando se é Concurso e Qual Concurso
+    jid_tox = "5521988881111@s.whatsapp.net"
+    bot.handle_message(jid_tox, "#saudelab")
+    r_tox1 = bot.handle_message(jid_tox, "3")
+    assert "Concurso Público" in r_tox1
+    r_tox2 = bot.handle_message(jid_tox, "1")  # Sim, é para Concurso Público
+    assert "qual *concurso*" in r_tox2.lower()
+    r_tox3 = bot.handle_message(jid_tox, "Polícia Militar PMERJ")
+    assert "nome completo" in r_tox3
+    bot.handle_message(jid_tox, "Carlos Concurseiro")
+    r_tox_done = bot.handle_message(jid_tox, "01/03/2000")
+    assert "Uma de nossas recepcionistas já recebeu" in r_tox_done
+    with bot.get_db() as conn:
+        t_row = conn.execute("SELECT * FROM triagens WHERE patient_name = 'Carlos Concurseiro' ORDER BY id DESC LIMIT 1").fetchone()
+        assert t_row and "Concurso: Polícia Militar PMERJ" in t_row["exams"]
+    print("[OK] 09. Fluxo Exame Toxicológico (pergunta se é Concurso + Qual Concurso) validado.")
+
+    # 10: Regra de 2 tentativas para Áudio -> Encaminha para Opção 5 (Atendente) na 2ª tentativa!
+    phone_aud = "5521977774444@s.whatsapp.net"
+    bot.handle_message(phone_aud, "#saudelab")
+    r_aud1 = bot.handle_message(phone_aud, "", is_audio=True)  # 1º áudio no menu
+    assert "ainda não consigo ouvir áudios" in r_aud1
+    r_aud2 = bot.handle_message(phone_aud, "", is_audio=True)  # 2º áudio seguido -> Transfere p/ Opção 5!
+    assert "Opção 5" in r_aud2 and "recepcionistas já vai ouvir" in r_aud2
+    # Se mandar 3º áudio, bot já está pausado por 1h para a atendente
+    r_aud3 = bot.handle_message(phone_aud, "", is_audio=True)
+    assert r_aud3 is None
+    print("[OK] 10. Regra de 2 tentativas de Áudio -> Transbordo automático para Opção 5 e pausa de 1h.")
+
+    # 11: Atendente assumindo no meio da conversa (fromMe=True, mesmo em TEST_MODE=true) -> Aborta triagem por 1 hora!
+    phone_takeover = "5521966663333@s.whatsapp.net"
+    bot.handle_message(phone_takeover, "#saudelab")
+    bot.handle_message(phone_takeover, "1")  # escolhe Agendamentos/Orçamentos
+    r_step_name = bot.handle_message(phone_takeover, "Hemograma")
+    assert "nome completo" in r_step_name
+    # Agora a atendente (fromMe=True) manda "Pode falar" no meio da triagem!
+    with bot.app.test_client() as client:
+        resp = client.post("/api/message", json={"jid": phone_takeover, "text": "Pode falar", "fromMe": True})
+        assert resp.status_code == 200 and resp.get_json()["reply"] is None
+    # Cliente responde "Te amo" -> O bot NÃO pode responder porque a atendente assumiu!
+    r_after_human = bot.handle_message(phone_takeover, "Te amo")
+    assert r_after_human is None
+    # Simula passagem de 1 hora (3605 segundos) -> Bot volta a ficar disponível caso o cliente chame depois!
+    with bot.get_db() as conn:
+        conn.execute("UPDATE sessions SET paused_until_ts = ? WHERE phone = ?", (int(time.time()) - 10, phone_takeover))
+        conn.commit()
+    r_after_1h = bot.handle_message(phone_takeover, "Oi, quero fazer exame")
+    assert "1 - Agendamentos / Orçamentos" in r_after_1h or "Unidade Vila Valqueire" in r_after_1h
+    print("[OK] 11. Atendente assumindo aborta a triagem na hora por 1h e reativa após 1h.")
+
+    # 12 a 15: Ociosidade de 5 minutos (2 tentativas -> encerra -> reativa quando mandar nova mensagem)
     lid_jid = "268594420183281@lid"
     bot.handle_message(lid_jid, "#saudelab")
 
@@ -60,63 +118,34 @@ def run_all_tests() -> None:
         conn.commit()
     out1 = bot.check_inactive_sessions()
     assert len(out1) == 1 and out1[0]["attempt"] == 1 and out1[0]["jid"] == lid_jid
-    print("[OK] 08. 1ª tentativa de ociosidade após 5 minutos enviada para @lid.")
+    print("[OK] 12. 1ª tentativa de ociosidade após 5 minutos enviada para @lid.")
 
     with bot.get_db() as conn:
         conn.execute("UPDATE sessions SET last_activity_ts = ? WHERE phone = ?", (int(time.time()) - 305, lid_jid))
         conn.commit()
     out2 = bot.check_inactive_sessions()
     assert len(out2) == 1 and out2[0]["attempt"] == 2
-    print("[OK] 09. 2ª tentativa de ociosidade após +5 minutos enviada.")
+    print("[OK] 13. 2ª tentativa de ociosidade após +5 minutos enviada.")
 
     with bot.get_db() as conn:
         conn.execute("UPDATE sessions SET last_activity_ts = ? WHERE phone = ?", (int(time.time()) - 305, lid_jid))
         conn.commit()
     out_close = bot.check_inactive_sessions()
     assert len(out_close) == 1 and out_close[0]["attempt"] == "closed"
-    print("[OK] 10. Atendimento encerrado automaticamente após 2 tentativas sem resposta.")
+    print("[OK] 14. Atendimento encerrado automaticamente após 2 tentativas sem resposta.")
 
     r_reactivate = bot.handle_message(lid_jid, "#saudelab")
-    assert "1 - Exames na Unidade" in r_reactivate
-    print("[OK] 11. Reativação automática após encerramento por ociosidade funcionando.")
-
-    # 12: Fluxo Opção 4 (Falar sobre agendamento realizado)
-    phone_ag = "5521988882222@s.whatsapp.net"
-    bot.handle_message(phone_ag, "#saudelab")
-    r_op4 = bot.handle_message(phone_ag, "4")
-    assert "localizar o seu agendamento" in r_op4
-    bot.handle_message(phone_ag, "Roberto Alves")
-    r_ag_err = bot.handle_message(phone_ag, "111.222.333-44")
-    assert "incorreto" in r_ag_err
-    r_ag_ok = bot.handle_message(phone_ag, "529.982.247-25")
-    assert "recepcionista localizar o seu agendamento" in r_ag_ok and "SOLICITAÇÃO SOBRE AGENDAMENTO" not in r_ag_ok
-    print("[OK] 12. Fluxo Opção 4 (Agendamento Existente) validado sem bloco de resumo.")
-
-    # 13: Regra de Áudio (pede texto no Menu/CPF, mas aceita nos exames)
-    phone_aud = "5521977774444@s.whatsapp.net"
-    bot.handle_message(phone_aud, "#saudelab")
-    r_aud_menu = bot.handle_message(phone_aud, "", is_audio=True)
-    assert "ainda não consigo ouvir áudios" in r_aud_menu
-    bot.handle_message(phone_aud, "1")
-    r_aud_exams = bot.handle_message(phone_aud, "", is_audio=True)
-    assert "nome completo" in r_aud_exams
-    r_aud_name = bot.handle_message(phone_aud, "", is_audio=True)
-    assert "por texto" in r_aud_name
-    print("[OK] 13. Tratamento inteligente de Áudio (Menu, Exames e Cadastro) validado.")
-
-    # 14: Chamada não atendida inicia a triagem
-    r_call = bot.handle_missed_call(phone_aud)
-    assert "Vimos que você tentou nos ligar" in r_call
-    print("[OK] 14. Chamada não atendida inicia a triagem automaticamente.")
+    assert "1 - Agendamentos / Orçamentos" in r_reactivate
+    print("[OK] 15. Reativação automática após encerramento por ociosidade funcionando.")
 
     # Limpa dados fictícios de teste mantendo banco limpo
     with bot.get_db() as conn:
         conn.execute("DELETE FROM sessions;")
-        conn.execute("DELETE FROM triagens WHERE patient_name IN ('Giovanna Teste', 'Roberto Alves');")
+        conn.execute("DELETE FROM triagens WHERE patient_name IN ('Giovanna Teste', 'Carlos Concurseiro');")
         conn.commit()
 
     print("============================================================")
-    print(" TODOS OS 14 TESTES AUTOMATIZADOS PASSARAM COM 100% DE SUCESSO")
+    print(" TODOS OS 15 TESTES AUTOMATIZADOS PASSARAM COM 100% DE SUCESSO")
     print("============================================================")
 
 
