@@ -1,6 +1,6 @@
 # CONTEXTO DO PROJETO — Saúdelab Triagem Direta WhatsApp
 
-**Versão Atual:** 4.1.0  
+**Versão Atual:** 4.2.0  
 **Data de Atualização:** 07/11/2026  
 **Responsável Técnico:** Caio Ferreira de Araujo — Analista de TI  
 **Cliente:** Saúdelab Exames Laboratoriais (`saudelabexames.com.br`)  
@@ -26,4 +26,4 @@
 
 ---
 
-**Criado por: Caio Araujo - Analista de TI | Build v4.1.0**
+**Criado por: Caio Araujo - Analista de TI | Build v4.2.0**

@@ -8,7 +8,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const VERSION = '4.1.0';
+const VERSION = '4.2.0';
 const ENV_PATH = path.join(__dirname, '.env');
 const AUTH_DIR = path.join(__dirname, 'auth_whatsapp');
 const BOT_PY = path.join(__dirname, 'bot.py');
@@ -175,7 +175,7 @@ const PWA_INSTALL_SNIPPET = `
 const PWA_INSTALL_CSS = `
     .install-toast {
         position: fixed;
-        bottom: 16px;
+        bottom: max(16px, calc(env(safe-area-inset-bottom, 12px) + 8px));
         left: 12px;
         right: 12px;
         max-width: 520px;
@@ -368,7 +368,16 @@ const PWA_INSTALL_JS = `
         if (b) b.style.display = 'none';
     });
 
+    if (isRunningStandalone() && isIosDevice()) {
+        document.documentElement.classList.add('ios-standalone');
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
+        if (isRunningStandalone()) {
+            if (isIosDevice()) document.documentElement.classList.add('ios-standalone');
+            const hBtn = document.querySelector('.btn-header-install');
+            if (hBtn) hBtn.style.display = 'none';
+        }
         if (!isRunningStandalone() && sessionStorage.getItem('hide_install_banner') !== '1') {
             setTimeout(() => {
                 const b = document.getElementById('installBanner');
@@ -455,7 +464,13 @@ function renderLoginPage(errorMsg = '') {
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px 16px 90px;
+            padding-top: max(24px, calc(env(safe-area-inset-top, 0px) + 20px));
+            padding-left: max(16px, env(safe-area-inset-left, 16px));
+            padding-right: max(16px, env(safe-area-inset-right, 16px));
+            padding-bottom: max(90px, calc(env(safe-area-inset-bottom, 20px) + 70px));
+        }
+        html.ios-standalone body {
+            padding-top: max(58px, calc(env(safe-area-inset-top, 47px) + 18px));
         }
         .login-card {
             background: #ffffff;
@@ -830,17 +845,23 @@ const server = http.createServer(async (req, res) => {
             -webkit-text-size-adjust: 100%;
         }
         body {
-            padding-bottom: 90px;
+            padding-bottom: max(90px, calc(env(safe-area-inset-bottom, 20px) + 70px));
         }
         header {
             width: 100%;
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: #fff;
-            padding: 12px 14px;
+            padding-top: max(14px, calc(env(safe-area-inset-top, 0px) + 12px));
+            padding-bottom: 14px;
+            padding-left: max(14px, env(safe-area-inset-left, 14px));
+            padding-right: max(14px, env(safe-area-inset-right, 14px));
             position: sticky;
             top: 0;
             z-index: 50;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+        }
+        html.ios-standalone header {
+            padding-top: max(54px, calc(env(safe-area-inset-top, 47px) + 12px));
         }
         .header-inner {
             max-width: 1120px;
@@ -856,7 +877,7 @@ const server = http.createServer(async (req, res) => {
             align-items: center;
             gap: 10px;
             min-width: 0;
-            flex: 1 1 auto;
+            flex: 1 1 200px;
         }
         .header-brand img {
             width: 38px;
@@ -867,20 +888,29 @@ const server = http.createServer(async (req, res) => {
         }
         .header-title {
             min-width: 0;
+            flex: 1;
         }
         .header-title h1 {
-            font-size: 0.98rem;
+            font-size: 0.96rem;
             font-weight: 700;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            line-height: 1.25;
+            word-break: break-word;
         }
         .header-title p {
             font-size: 0.73rem;
             opacity: 0.9;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            line-height: 1.25;
+        }
+        @media (max-width: 430px) {
+            .header-inner {
+                gap: 8px;
+            }
+            .header-title h1 {
+                font-size: 0.9rem;
+            }
+            .header-title p {
+                font-size: 0.7rem;
+            }
         }
         .header-actions {
             display: flex;

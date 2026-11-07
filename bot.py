@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "triagem.db")
 LOG_PATH = os.path.join(BASE_DIR, "triagem.log")
@@ -182,86 +182,98 @@ def detect_quote_or_exam_intent(text_lower: str) -> bool:
 # ==============================================================================
 # MENSAGENS PADRONIZADAS (TRIAGEM 24H — EXCLUSIVAMENTE PARTICULAR)
 # ==============================================================================
+BLOCO_OPCOES_MENU = (
+    "*1 - Exames na Unidade / Orçamento*\n"
+    "📍 Rua dos Miosótis, 55 - Sala 504 (Vila Valqueire)\n\n"
+    "*2 - Coleta Domiciliar / Orçamento*\n"
+    "🏠 Atendimento no conforto da sua casa\n\n"
+    "*3 - Exame Toxicológico*\n"
+    "🚗 CNH / DETRAN / Concurso / CLT\n\n"
+    "*4 - Falar sobre um agendamento já realizado*\n"
+    "📅 Dúvidas ou remarcação de agendamento\n\n"
+    "*5 - Falar diretamente com uma atendente*\n"
+    "👩‍⚕️ Atendimento com a nossa recepção"
+)
+
 MENSAGEM_MENU = (
-    "Olá, seja bem-vindo(a) à Saúdelab Exames Laboratoriais (Vila Valqueire).\n"
-    "Nosso atendimento é particular e personalizado.\n\n"
-    "Como podemos ajudar você hoje? Digite o número da opção:\n\n"
-    "1 - Exames na Unidade / Orçamento (Rua dos Miosótis, 55 - Sala 504)\n"
-    "2 - Coleta Domiciliar / Orçamento\n"
-    "3 - Exame Toxicológico (CNH / DETRAN / Concurso / CLT)\n"
-    "4 - Falar sobre um agendamento já realizado\n"
-    "5 - Falar diretamente com uma atendente"
+    "Olá! Seja bem-vindo(a) à *Saúdelab Exames Laboratoriais* (Vila Valqueire).\n"
+    "Nosso atendimento é *particular* e personalizado.\n\n"
+    "Como podemos ajudar você hoje?\n"
+    "Digite apenas o *número* da opção desejada:\n\n"
+    + BLOCO_OPCOES_MENU
 )
 
 MENSAGEM_CHAMADA_PERDIDA = (
-    "Olá! Vimos que você tentou nos ligar agora na Saúdelab Exames Laboratoriais (Vila Valqueire).\n"
+    "Olá! Vimos que você tentou nos ligar agora na *Saúdelab Exames Laboratoriais* (Vila Valqueire).\n"
     "Podemos adiantar o seu atendimento ou orçamento por aqui mesmo!\n\n"
-    "Como podemos ajudar você hoje? Digite o número da opção:\n\n"
-    "1 - Exames na Unidade / Orçamento (Rua dos Miosótis, 55 - Sala 504)\n"
-    "2 - Coleta Domiciliar / Orçamento\n"
-    "3 - Exame Toxicológico (CNH / DETRAN / Concurso / CLT)\n"
-    "4 - Falar sobre um agendamento já realizado\n"
-    "5 - Falar diretamente com uma atendente"
+    "Como podemos ajudar você hoje?\n"
+    "Digite apenas o *número* da opção desejada:\n\n"
+    + BLOCO_OPCOES_MENU
 )
 
 MENSAGEM_AUDIO_NO_MENU = (
     "Recebemos o seu áudio! No momento estou no atendimento automático de triagem e ainda não consigo ouvir áudios.\n\n"
-    "Para agilizarmos o seu atendimento, por favor digite o número de uma das opções abaixo (ou digite 5 para uma atendente ouvir o seu áudio):\n\n"
-    "1 - Exames na Unidade / Orçamento (Vila Valqueire)\n"
-    "2 - Coleta Domiciliar / Orçamento\n"
-    "3 - Exame Toxicológico (CNH / DETRAN / CLT)\n"
-    "4 - Falar sobre um agendamento já realizado\n"
-    "5 - Falar diretamente com uma atendente"
+    "Para agilizarmos o seu atendimento, digite o *número* de uma das opções abaixo (ou digite *5* para uma atendente ouvir o seu áudio):\n\n"
+    + BLOCO_OPCOES_MENU
 )
 
 MENSAGEM_AUDIO_DADOS_CADASTRAIS = (
-    "Para que não haja nenhum erro de digitação no seu cadastro, por favor escreva essa informação por texto "
-    "(ou digite 5 caso prefira falar diretamente com a nossa recepcionista):"
+    "Para que não haja nenhum erro de digitação no seu cadastro, por favor escreva essa informação *por texto* "
+    "(ou digite *5* caso prefira falar diretamente com a nossa recepcionista):"
 )
 
 MENSAGEM_COTA_MODALIDADE = (
-    "Olá, seja bem-vindo(a) à Saúdelab Exames Laboratoriais (Vila Valqueire).\n"
-    "Para prepararmos a cotação dos seus exames, você prefere realizar a coleta na nossa Unidade ou em Coleta Domiciliar?\n\n"
-    "1 - Na Unidade Vila Valqueire (Rua dos Miosótis, 55 - Sala 504)\n"
-    "2 - Coleta Domiciliar"
+    "Olá! Seja bem-vindo(a) à *Saúdelab Exames Laboratoriais* (Vila Valqueire).\n\n"
+    "Para prepararmos a cotação dos seus exames, onde você prefere realizar a coleta?\n"
+    "Digite o *número* da opção:\n\n"
+    "*1 - Na Unidade Vila Valqueire*\n"
+    "📍 Rua dos Miosótis, 55 - Sala 504\n\n"
+    "*2 - Coleta Domiciliar*\n"
+    "🏠 Vamos até o seu endereço"
 )
 
 MENSAGEM_ENDERECO_DOMICILIAR = (
-    "Certo, faremos o atendimento por Coleta Domiciliar.\n"
-    "Por favor, informe o seu bairro e endereço completo (rua, número e complemento):"
+    "Certo, faremos o atendimento por *Coleta Domiciliar*.\n\n"
+    "Por favor, informe o seu *bairro e endereço completo* (rua, número e complemento):"
 )
 
 MENSAGEM_PEDIR_EXAMES = (
-    "Quais exames você precisa realizar?\n"
-    "Você pode escrever os nomes dos exames abaixo, mandar um áudio falando os exames ou enviar uma foto do seu pedido médico."
+    "Quais *exames* você precisa realizar?\n\n"
+    "Você pode:\n"
+    "• Escrever os nomes dos exames\n"
+    "• Enviar a *foto do pedido médico*\n"
+    "• Ou mandar um *áudio* falando os exames"
 )
 
 MENSAGEM_PEDIR_NOME = (
-    "Obrigado. Para adiantarmos o seu atendimento e orçamento, qual é o nome completo do(a) paciente?"
+    "Obrigado!\n\n"
+    "Para adiantarmos o seu atendimento e orçamento, qual é o *nome completo* do(a) paciente?"
 )
 
 MENSAGEM_PEDIR_CPF_NASC = (
-    "Por favor, informe também o CPF ou a data de nascimento do(a) paciente (com ou sem pontuação):"
+    "Por favor, informe também o *CPF* ou a *data de nascimento* do(a) paciente\n"
+    "_(pode digitar com ou sem pontuação)_:"
 )
 
 MENSAGEM_FINAL_TRIAGEM = (
     "Perfeito, muito obrigado pelas informações!\n\n"
-    "Uma de nossas recepcionistas já recebeu a sua ficha e vai dar sequência ao seu atendimento por aqui mesmo "
+    "Uma de nossas recepcionistas já recebeu a sua solicitação e vai dar sequência ao seu atendimento por aqui mesmo "
     "para enviar o seu orçamento, as orientações de preparo e combinar o melhor horário com você."
 )
 
 MENSAGEM_FINAL_AGENDAMENTO = (
-    "Obrigado pelas informações.\n\n"
+    "Obrigado pelas informações!\n\n"
     "Já encaminhei os seus dados para a nossa recepcionista localizar o seu agendamento e dar sequência ao seu atendimento por aqui."
 )
 
 MENSAGEM_FOLLOWUP_INATIVIDADE = (
-    "Olá! Você ainda está por aí? Estamos aguardando a sua resposta para concluir a sua triagem na Saúdelab Exames.\n"
-    "(Caso deseje recomeçar do início, digite 0)."
+    "Olá! Você ainda está por aí?\n"
+    "Estamos aguardando a sua resposta para concluir a sua triagem na *Saúdelab Exames*.\n\n"
+    "_(Caso deseje voltar ao menu inicial, digite *0*)_."
 )
 
 MENSAGEM_ENCERRAMENTO_INATIVIDADE = (
-    "Como não recebemos sua resposta, encerramos este atendimento automático por enquanto.\n"
+    "Como não recebemos sua resposta, encerramos este atendimento automático por enquanto.\n\n"
     "Quando precisar, basta enviar uma nova mensagem por aqui que o atendimento será iniciado novamente!"
 )
 
@@ -564,20 +576,19 @@ def handle_message(phone: str, text: str, is_media: bool = False, is_audio: bool
                 state = "WAIT_MODALITY_AFTER_QUOTE"
                 log_event("COTA_NO_MENU", jid, f"Cliente pediu cotação/exame direto no menu: '{text}'")
                 reply = (
-                    "Anotei a sua solicitação para cotação.\n"
-                    "Você prefere realizar a coleta na nossa Unidade em Vila Valqueire ou em Coleta Domiciliar?\n\n"
-                    "1 - Na Unidade Vila Valqueire (Rua dos Miosótis, 55 - Sala 504)\n"
-                    "2 - Coleta Domiciliar"
+                    "Anotei a sua solicitação para cotação!\n\n"
+                    "Onde você prefere realizar a coleta?\n"
+                    "Digite o *número* da opção:\n\n"
+                    "*1 - Na Unidade Vila Valqueire*\n"
+                    "📍 Rua dos Miosótis, 55 - Sala 504\n\n"
+                    "*2 - Coleta Domiciliar*\n"
+                    "🏠 Vamos até o seu endereço"
                 )
 
             else:
                 reply = (
-                    "Por favor, digite o número de uma das opções abaixo (ou escreva os exames que deseja orçar):\n\n"
-                    "1 - Exames na Unidade / Orçamento (Vila Valqueire)\n"
-                    "2 - Coleta Domiciliar / Orçamento\n"
-                    "3 - Exame Toxicológico (CNH / DETRAN / CLT)\n"
-                    "4 - Falar sobre um agendamento já realizado\n"
-                    "5 - Falar diretamente com uma atendente"
+                    "Por favor, digite apenas o *número* de uma das opções abaixo (ou escreva os exames que deseja orçar):\n\n"
+                    + BLOCO_OPCOES_MENU
                 )
 
         # ======================================================================

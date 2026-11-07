@@ -1,4 +1,4 @@
-# Saúdelab Exames Laboratoriais — Bot de Triagem 24h & Painel PWA Autenticado (v4.1.0)
+# Saúdelab Exames Laboratoriais — Bot de Triagem 24h & Painel PWA Autenticado (v4.2.0)
 
 Sistema enxuto, rápido e 24h de triagem automática para o WhatsApp da **Saúdelab Exames Laboratoriais** (`saudelabexames.com.br` — Vila Valqueire, Rio de Janeiro/RJ), com **Painel Web + PWA protegido por Login e Senha**.
 
@@ -55,4 +55,4 @@ Acesse no navegador ou celular:
 
 ---
 
-**Criado por: Caio Araujo - Analista de TI | Build v4.1.0**
+**Criado por: Caio Araujo - Analista de TI | Build v4.2.0**
