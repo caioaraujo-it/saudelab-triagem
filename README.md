@@ -1,57 +1,71 @@
 # Saúdelab Exames Laboratoriais — Bot de Triagem 24h & Painel PWA Autenticado (v4.3.0)
 
-Sistema enxuto, rápido e 24h de triagem automática para o WhatsApp da **Saúdelab Exames Laboratoriais** (`saudelabexames.com.br` — Vila Valqueire, Rio de Janeiro/RJ), com **Painel Web + PWA protegido por Login e Senha**.
+Sistema completo de triagem automática 24h via WhatsApp para a **Saúdelab Exames Laboratoriais** (`saudelabexames.com.br` — Rua dos Miosótis, 55 - Sala 504, Vila Valqueire, Rio de Janeiro/RJ), com Painel Web + PWA Responsivo (Celular, Tablet e PC) protegido por Login e Senha.
+
+- **URL em Produção:** `https://saudelab-triagem.onrender.com`
+- **Healthcheck 24h:** `https://saudelab-triagem.onrender.com/health`
+- **Repositório GitHub:** `https://github.com/caioaraujo-it/saudelab-triagem.git`
 
 ---
 
-## 1. Arquitetura Polida (Apenas o Necessário)
+## 1. Principais Funcionalidades
 
-- `whatsapp.js` — Ponte WhatsApp (`@whiskeysockets/baileys`) + Servidor Web Autenticado (`http://127.0.0.1:5006`) com QR Code ao vivo, Logs em tempo real, chaveamento Teste/Produção e PWA Mobile.
-- `bot.py` — Motor persistente em Python/Flask (`http://127.0.0.1:5007`) com máquina de estados em SQLite WAL (`triagem.db`), validação de CPF/Data de Nascimento, detecção de intenção de cotação/orçamento, tratamento de áudios/chamadas perdidas e timer de ociosidade.
-- `test_suite.py` — Suíte automatizada de testes cobrindo todos os fluxos de negócio.
-- `.env` / `.env.example` — Configurações de modo de operação, credenciais do painel e temporizadores.
-- `Dockerfile` & `requirements.txt` — Prontos para deploy em nuvem ou VPS Linux.
-
----
-
-## 2. Regras de Negócio Implementadas
-
-1. **Atendimento 100% Particular e Foco em Triagem:**
-   - Não envia preparo nem valores e não agenda horário (a recepcionista faz a cotação pelo **Worklab** e agenda diretamente).
-   - A mensagem final enviada ao paciente contém apenas o texto cordial de confirmação (sem bloco de resumo técnico no chat).
-2. **Menu de 5 Opções + Entendimento de Pedido de Cotação/Orçamento:**
-   - `1` — Exames na Unidade / Orçamento (Rua dos Miosótis, 55 - Sala 504 - Vila Valqueire)
-   - `2` — Coleta Domiciliar / Orçamento (pergunta bairro/endereço + exames)
-   - `3` — Exame Toxicológico (CNH / DETRAN / Concurso / CLT — avança direto para Nome Completo)
-   - `4` — Falar sobre um agendamento já realizado (pede Nome Completo + CPF/Data de Nascimento e encaminha)
-   - `5` — Falar diretamente com uma atendente
-   - Se o cliente já mandar mensagem pedindo **valor, preço, cotação, orçamento** ou mandar a **foto do pedido médico**, o bot entende a intenção, pergunta apenas se prefere **Unidade (1)** ou **Coleta Domiciliar (2)** e segue para Nome e CPF/Data de Nascimento.
-3. **Validação de CPF e Data de Nascimento (Com ou Sem Máscara):**
-   - Aceita CPF com ou sem pontuação (`123.456.789-01` ou `12345678901`) validando os dígitos verificadores.
-   - Aceita Data de Nascimento com ou sem barras (`15/08/1985`, `15-08-1985` ou `15081985`).
-   - Caso inválido, solicita gentilmente a digitação correta.
-4. **Regras para Áudio e Ligações de WhatsApp:**
-   - **Áudio no início/menu ou em Nome/CPF:** avisa gentilmente que a triagem automática não ouve áudios e pede para digitar a opção ou os dados (ou `5` para atendente).
-   - **Áudio na etapa de Exames ou Endereço:** aceita o áudio normalmente e avança para o próximo passo.
-   - **Ligação de Voz/Vídeo no WhatsApp:** inicia a triagem por mensagem **somente se a chamada não for atendida**. Se a equipe atender a ligação, o bot não envia mensagem.
-5. **Controle de Ociosidade (5 minutos, até 2 avisos):**
-   - A cada 5 minutos sem resposta na triagem, pergunta se o cliente ainda está lá (até 2 vezes).
-   - Se continuar sem responder após a 2ª tentativa, encerra o atendimento (`state = IDLE`, `paused_for_human = 0`) e reativa automaticamente quando o cliente mandar nova mensagem.
-6. **Painel Web + PWA com Login e Senha:**
-   - Protegido pelas variáveis `PANEL_USER` e `PANEL_PASS` do `.env`.
-   - Permite ler o QR Code, acompanhar os logs ao vivo, alternar entre **Modo Teste (`#saudelab`)** e **Modo Produção 24h**, ou desconectar/trocar o aparelho de WhatsApp com 1 clique.
+1. **Menu de 5 Opções Limpo e Espaçado (Sem Emojis):**
+   - `1 - Agendamentos / Orçamentos` (Unidade Vila Valqueire)
+   - `2 - Coleta Domiciliar / Orçamento` (Atendimento na residência)
+   - `3 - Exame Toxicológico` (Pergunta se é para Concurso Público e qual concurso, ou CNH/DETRAN/CLT)
+   - `4 - Falar sobre um agendamento já realizado`
+   - `5 - Falar diretamente com uma atendente`
+2. **Atendente Assume a Conversa $\rightarrow$ Pausa Automática de 1 Hora:**
+   - Assim que uma recepcionista envia qualquer mensagem na conversa (`fromMe`), o bot aborta a triagem imediatamente e fica pausado por **1 hora** para aquele cliente, sem interromper o atendimento humano.
+3. **Regra de 2 Tentativas para Áudios / Dificuldade de Leitura:**
+   - Aceita áudios normalmente quando o cliente está informando os exames, o endereço ou o nome do concurso.
+   - Nas etapas de escolha de opção ou Nome/CPF, tenta orientar até **2 vezes**; na 2ª tentativa sem sucesso, transfere automaticamente para a **Opção 5 (Atendente)**.
+4. **Validação de CPF e Data de Nascimento (Com ou Sem Pontuação):**
+   - Valida dígitos verificadores de CPF (`123.456.789-01` ou `12345678901`) e datas reais (`01/03/2000` ou `01032000`).
+5. **Chamadas de Voz/Vídeo Não Atendidas:**
+   - Se um cliente ligar pelo WhatsApp e a chamada **não for atendida**, o bot inicia a triagem por texto automaticamente. Se a chamada for atendida, o bot não envia nada.
+6. **Timer de Ociosidade (5 Minutos, até 2 Avisos):**
+   - Envia até 2 lembretes a cada 5 minutos de inatividade e encerra o atendimento caso não haja resposta, reativando quando o cliente mandar nova mensagem.
+7. **Painel PWA Instalável (iOS, Android e PC):**
+   - Protegido por Login e Senha (`PANEL_USER` / `PANEL_PASS`), adaptável ao Notch do iPhone e com botão para instalar na tela inicial, alternar entre Modo Teste (`#saudelab`) e Produção 24h, visualizar logs em tempo real e gerar novo QR Code.
 
 ---
 
-## 3. Como Executar
+## 2. Variáveis de Ambiente (`.env` / Render Environment)
 
-```powershell
-cd D:\Projetos\saudelab-triagem
-node whatsapp.js
+```env
+TEST_MODE=true
+TRIGGER_WORD=#saudelab
+INACTIVITY_MINUTES=5
+MAX_FOLLOWUPS=2
+HUMAN_PAUSE_MINUTES=60
+STATUS_PORT=5006
+BOT_ENGINE_PORT=5007
+PANEL_USER=saudelab
+PANEL_PASS= DEFINIR_SENHA_NO_AMBIENTE
+PANEL_SECRET= DEFINIR_CHAVE_SECRETA
 ```
 
-Acesse no navegador ou celular:
-- **URL Local:** `http://127.0.0.1:5006`
+---
+
+## 3. Comandos Úteis (Execução Local, Testes e Deploy)
+
+### Rodar a suíte de 15 testes automatizados:
+```powershell
+cd D:\Projetos\saudelab-triagem
+python test_suite.py
+```
+
+### Enviar atualizações para o Render (Auto-Deploy via GitHub):
+```powershell
+cd D:\Projetos\saudelab-triagem
+git add -A
+git commit -m "Descricao da alteracao"
+git push origin main
+```
+
+Para detalhes completos da arquitetura, máquina de estados e histórico de decisões, consulte o arquivo [`CONTEXTO_PROJETO.md`](./CONTEXTO_PROJETO.md).
 
 ---
 
