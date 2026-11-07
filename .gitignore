@@ -1,0 +1,8 @@
+node_modules/
+__pycache__/
+auth_whatsapp/
+triagem.db
+triagem.db-shm
+triagem.db-wal
+triagem.log
+.env

@@ -1,0 +1,15 @@
+{
+  "name": "saudelab-triagem",
+  "version": "4.0.0",
+  "description": "Bot de Triagem 24h WhatsApp + Painel PWA Autenticado - Saudelab Exames Laboratoriais",
+  "main": "whatsapp.js",
+  "scripts": {
+    "start": "node whatsapp.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

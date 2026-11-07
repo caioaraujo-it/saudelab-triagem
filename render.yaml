@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: saudelab-triagem
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 5006
+      - key: BOT_ENGINE_PORT
+        value: 5007
+      - key: TEST_MODE
+        value: "true"
+      - key: TRIGGER_WORD
+        value: "#saudelab"
+      - key: INACTIVITY_MINUTES
+        value: "5"
+      - key: MAX_FOLLOWUPS
+        value: "2"
+      - key: PANEL_USER
+        value: saudelab
+      - key: PANEL_PASS
+        sync: false
+      - key: PANEL_SECRET
+        generateValue: true
