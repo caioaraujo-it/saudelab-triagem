@@ -8,7 +8,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const VERSION = '4.0.0';
+const VERSION = '4.1.0';
 const ENV_PATH = path.join(__dirname, '.env');
 const AUTH_DIR = path.join(__dirname, 'auth_whatsapp');
 const BOT_PY = path.join(__dirname, 'bot.py');
@@ -138,37 +138,331 @@ function startPythonEngine() {
 }
 
 // ==============================================================================
-// TELA DE LOGIN DO PAINEL WEB
+// COMPONENTE COMPARTILHADO: BANNER DE NOTIFICAÇÃO + MODAL DE INSTALAÇÃO PWA
+// ==============================================================================
+const PWA_INSTALL_SNIPPET = `
+    <!-- Banner de Notificação Flutuante para Instalar o App -->
+    <div id="installBanner" class="install-toast" style="display:none;">
+        <div class="install-toast-content">
+            <img src="/app-icon-192.png" alt="App" class="install-toast-icon">
+            <div class="install-toast-text">
+                <strong>Instalar App Saúdelab Bot?</strong>
+                <span>Adicione na tela inicial do seu celular ou PC para acesso rápido.</span>
+            </div>
+        </div>
+        <div class="install-toast-actions">
+            <button type="button" class="btn-toast-install" onclick="triggerInstallApp()">📲 Instalar Agora</button>
+            <button type="button" class="btn-toast-close" onclick="dismissInstallBanner()" aria-label="Fechar">✕</button>
+        </div>
+    </div>
+
+    <!-- Modal Explicativo de Instalação (iOS / Android / Desktop) -->
+    <div id="installModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeInstallModal()">
+        <div class="modal-box">
+            <div class="modal-header">
+                <img src="/app-icon-192.png" alt="Saúdelab" class="modal-logo">
+                <div>
+                    <h3>Instalar Aplicativo Saúdelab</h3>
+                    <p>Deixe como um atalho direto na sua tela inicial</p>
+                </div>
+            </div>
+            <div id="installModalBody" class="modal-body"></div>
+            <button type="button" class="modal-close-btn" onclick="closeInstallModal()">Entendi</button>
+        </div>
+    </div>
+`;
+
+const PWA_INSTALL_CSS = `
+    .install-toast {
+        position: fixed;
+        bottom: 16px;
+        left: 12px;
+        right: 12px;
+        max-width: 520px;
+        margin: 0 auto;
+        background: #0f172a;
+        color: #ffffff;
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.38);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        z-index: 9998;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        animation: slideUpToast 0.3s ease-out;
+    }
+    @keyframes slideUpToast {
+        from { transform: translateY(30px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+    .install-toast-content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .install-toast-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        flex-shrink: 0;
+        background: #fff;
+    }
+    .install-toast-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+    }
+    .install-toast-text strong {
+        font-size: 0.92rem;
+        color: #f8fafc;
+    }
+    .install-toast-text span {
+        font-size: 0.78rem;
+        color: #cbd5e1;
+        line-height: 1.35;
+    }
+    .install-toast-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .btn-toast-install {
+        flex: 1;
+        background: #14b8a6;
+        color: #042f2e;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 0.85rem;
+        font-weight: 800;
+        cursor: pointer;
+    }
+    .btn-toast-close {
+        background: rgba(255, 255, 255, 0.12);
+        color: #cbd5e1;
+        border: none;
+        border-radius: 10px;
+        width: 38px;
+        height: 38px;
+        font-size: 0.95rem;
+        font-weight: 700;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.68);
+        backdrop-filter: blur(3px);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    }
+    .modal-box {
+        background: #ffffff;
+        color: #1e293b;
+        width: 100%;
+        max-width: 420px;
+        border-radius: 18px;
+        padding: 22px 20px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    }
+    .modal-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+    .modal-logo {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        flex-shrink: 0;
+    }
+    .modal-header h3 {
+        font-size: 1.02rem;
+        color: #0f172a;
+    }
+    .modal-header p {
+        font-size: 0.78rem;
+        color: #64748b;
+    }
+    .modal-body {
+        font-size: 0.86rem;
+        color: #334155;
+        line-height: 1.5;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 16px;
+    }
+    .step-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .step-item:last-child { margin-bottom: 0; }
+    .step-num {
+        background: #0f766e;
+        color: #fff;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+    .modal-close-btn {
+        width: 100%;
+        background: #0f766e;
+        color: #ffffff;
+        border: none;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 0.9rem;
+        font-weight: 700;
+        cursor: pointer;
+    }
+`;
+
+const PWA_INSTALL_JS = `
+    let deferredInstallPrompt = null;
+
+    function isRunningStandalone() {
+        return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    }
+
+    function isIosDevice() {
+        const ua = window.navigator.userAgent || '';
+        return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        if (!isRunningStandalone() && sessionStorage.getItem('hide_install_banner') !== '1') {
+            const b = document.getElementById('installBanner');
+            if (b) b.style.display = 'flex';
+        }
+    });
+
+    window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        const b = document.getElementById('installBanner');
+        if (b) b.style.display = 'none';
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+        if (!isRunningStandalone() && sessionStorage.getItem('hide_install_banner') !== '1') {
+            setTimeout(() => {
+                const b = document.getElementById('installBanner');
+                if (b) b.style.display = 'flex';
+            }, 900);
+        }
+    });
+
+    function dismissInstallBanner() {
+        sessionStorage.setItem('hide_install_banner', '1');
+        const b = document.getElementById('installBanner');
+        if (b) b.style.display = 'none';
+    }
+
+    function closeInstallModal() {
+        const m = document.getElementById('installModal');
+        if (m) m.style.display = 'none';
+    }
+
+    async function triggerInstallApp() {
+        if (deferredInstallPrompt) {
+            deferredInstallPrompt.prompt();
+            try {
+                const choice = await deferredInstallPrompt.userChoice;
+                if (choice && choice.outcome === 'accepted') {
+                    dismissInstallBanner();
+                }
+            } catch (_) {}
+            deferredInstallPrompt = null;
+            return;
+        }
+
+        const body = document.getElementById('installModalBody');
+        const modal = document.getElementById('installModal');
+        if (!body || !modal) return;
+
+        if (isRunningStandalone()) {
+            body.innerHTML = '<p>✅ <b>Este painel já está instalado</b> e rodando como aplicativo no seu aparelho!</p>';
+        } else if (isIosDevice()) {
+            body.innerHTML =
+                '<div class="step-item"><span class="step-num">1</span><div>Toque no botão <b>Compartilhar</b> (ícone de quadrado com seta para cima <b>↑</b> na barra inferior ou superior do Safari/Chrome).</div></div>' +
+                '<div class="step-item"><span class="step-num">2</span><div>Role o menu para baixo e toque em <b>"Adicionar à Tela de Início"</b>.</div></div>' +
+                '<div class="step-item"><span class="step-num">3</span><div>Toque em <b>"Adicionar"</b> no canto superior direito. O ícone <b>Saúdelab Bot</b> ficará salvo junto aos seus aplicativos!</div></div>';
+        } else {
+            body.innerHTML =
+                '<div class="step-item"><span class="step-num">1</span><div>Toque no menu do navegador (ícone <b>⋮</b> no canto superior direito do Chrome/Edge).</div></div>' +
+                '<div class="step-item"><span class="step-num">2</span><div>Selecione <b>"Instalar aplicativo"</b> ou <b>"Adicionar à tela inicial"</b>.</div></div>' +
+                '<div class="step-item"><span class="step-num">3</span><div>Confirme em <b>Instalar</b> para criar o atalho direto no seu aparelho.</div></div>';
+        }
+        modal.style.display = 'flex';
+    }
+`;
+
+// ==============================================================================
+// TELA DE LOGIN DO PAINEL WEB (100% RESPONSIVA + PWA)
 // ==============================================================================
 function renderLoginPage(errorMsg = '') {
     return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0f766e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Saúdelab Bot">
     <link rel="manifest" href="/manifest.json">
-    <link rel="icon" type="image/png" href="/app-icon.png">
-    <link rel="apple-touch-icon" href="/app-icon.png">
+    <link rel="icon" type="image/png" href="/app-icon-192.png">
+    <link rel="apple-touch-icon" href="/app-icon-192.png">
     <title>Login — Painel Saúdelab Bot 24h</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
+        html, body {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(145deg, #0d4f4b 0%, #0f766e 50%, #115e59 100%);
             min-height: 100vh;
+            color: #1e293b;
+            -webkit-text-size-adjust: 100%;
+        }
+        body {
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 18px;
-            color: #1e293b;
+            padding: 20px 16px 90px;
         }
         .login-card {
             background: #ffffff;
             width: 100%;
             max-width: 400px;
             border-radius: 18px;
-            padding: 32px 26px;
+            padding: 28px 22px;
             box-shadow: 0 20px 45px rgba(0, 0, 0, 0.28);
             text-align: center;
         }
@@ -176,18 +470,18 @@ function renderLoginPage(errorMsg = '') {
             width: 68px;
             height: 68px;
             border-radius: 16px;
-            margin-bottom: 14px;
+            margin-bottom: 12px;
             box-shadow: 0 4px 12px rgba(15, 118, 110, 0.25);
         }
         h1 {
-            font-size: 1.32rem;
+            font-size: 1.28rem;
             color: #0f172a;
             margin-bottom: 4px;
         }
         .subtitle {
-            font-size: 0.85rem;
+            font-size: 0.84rem;
             color: #64748b;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
         .error-box {
             background: #fef2f2;
@@ -201,7 +495,7 @@ function renderLoginPage(errorMsg = '') {
         }
         .form-group {
             text-align: left;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
         }
         label {
             display: block;
@@ -215,14 +509,14 @@ function renderLoginPage(errorMsg = '') {
             padding: 12px 14px;
             border: 1.5px solid #cbd5e1;
             border-radius: 10px;
-            font-size: 0.95rem;
+            font-size: 16px;
             outline: none;
             transition: border-color 0.2s;
         }
         input:focus {
             border-color: #0f766e;
         }
-        button {
+        .btn-submit {
             width: 100%;
             padding: 13px;
             background: #0f766e;
@@ -232,22 +526,31 @@ function renderLoginPage(errorMsg = '') {
             border: none;
             border-radius: 10px;
             cursor: pointer;
-            margin-top: 6px;
-            transition: background 0.2s;
+            margin-top: 4px;
         }
-        button:hover {
-            background: #115e59;
+        .btn-install-login {
+            width: 100%;
+            padding: 11px;
+            background: #f0fdfa;
+            color: #0f766e;
+            border: 1.5px solid #99f6e4;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 10px;
         }
         .footer {
-            margin-top: 22px;
-            font-size: 0.75rem;
+            margin-top: 20px;
+            font-size: 0.74rem;
             color: #94a3b8;
         }
+        ${PWA_INSTALL_CSS}
     </style>
 </head>
 <body>
     <div class="login-card">
-        <img src="/app-icon.png" alt="Saúdelab" class="brand-logo">
+        <img src="/app-icon-192.png" alt="Saúdelab" class="brand-logo">
         <h1>Saúdelab Exames</h1>
         <p class="subtitle">Painel de Conexão WhatsApp e Triagem 24h</p>
         ${errorMsg ? `<div class="error-box">${errorMsg}</div>` : ''}
@@ -260,12 +563,17 @@ function renderLoginPage(errorMsg = '') {
                 <label for="password">Senha</label>
                 <input type="password" id="password" name="password" placeholder="Digite sua senha" required autocomplete="current-password">
             </div>
-            <button type="submit">Entrar no Painel</button>
+            <button type="submit" class="btn-submit">Entrar no Painel</button>
         </form>
+        <button type="button" class="btn-install-login" onclick="triggerInstallApp()">
+            📲 Instalar Aplicativo no Celular / PC
+        </button>
         <div class="footer">
             Criado por: Caio Araujo - Analista de TI | Build v${VERSION}
         </div>
     </div>
+    ${PWA_INSTALL_SNIPPET}
+    <script>${PWA_INSTALL_JS}</script>
 </body>
 </html>`;
 }
@@ -276,7 +584,7 @@ function renderLoginPage(errorMsg = '') {
 const server = http.createServer(async (req, res) => {
     const urlPath = req.url.split('?')[0];
 
-    // Endpoint público de Healthcheck / Keep-Alive 24h (Render, Koyeb, Cron-Job.org, UptimeRobot)
+    // Endpoint público de Healthcheck / Keep-Alive 24h
     if (urlPath === '/health' || urlPath === '/ping') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
@@ -289,32 +597,60 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // Arquivos públicos de PWA
-    if (urlPath === '/app-icon.png') {
-        const iconPath = path.join(__dirname, 'app-icon.png');
+    // Ícones reais PNG (192x192 e 512x512) para PWA Mobile / Desktop
+    if (urlPath === '/app-icon.png' || urlPath === '/app-icon-192.png') {
+        const fileName = urlPath === '/app-icon-192.png' ? 'app-icon-192.png' : 'app-icon.png';
+        const fallbackPath = path.join(__dirname, 'app-icon.png');
+        const iconPath = fs.existsSync(path.join(__dirname, fileName))
+            ? path.join(__dirname, fileName)
+            : fallbackPath;
         if (fs.existsSync(iconPath)) {
-            res.writeHead(200, { 'Content-Type': 'image/png' });
+            res.writeHead(200, {
+                'Content-Type': 'image/png',
+                'Cache-Control': 'public, max-age=86400'
+            });
             fs.createReadStream(iconPath).pipe(res);
             return;
         }
     }
 
     if (urlPath === '/manifest.json') {
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'application/manifest+json; charset=utf-8' });
         res.end(JSON.stringify({
+            id: '/',
             name: 'Saúdelab Exames — Painel do Bot 24h',
             short_name: 'Saúdelab Bot',
             description: 'Painel de QR Code, Status e Logs do Bot de Triagem Saúdelab Exames',
             start_url: '/',
+            scope: '/',
             display: 'standalone',
-            background_color: '#f1f5f9',
+            orientation: 'portrait',
+            background_color: '#0f766e',
             theme_color: '#0f766e',
             icons: [
+                {
+                    src: '/app-icon-192.png',
+                    sizes: '192x192',
+                    type: 'image/png',
+                    purpose: 'any'
+                },
+                {
+                    src: '/app-icon-192.png',
+                    sizes: '192x192',
+                    type: 'image/png',
+                    purpose: 'maskable'
+                },
                 {
                     src: '/app-icon.png',
                     sizes: '512x512',
                     type: 'image/png',
-                    purpose: 'any maskable'
+                    purpose: 'any'
+                },
+                {
+                    src: '/app-icon.png',
+                    sizes: '512x512',
+                    type: 'image/png',
+                    purpose: 'maskable'
                 }
             ]
         }));
@@ -326,7 +662,9 @@ const server = http.createServer(async (req, res) => {
         res.end(`
             self.addEventListener('install', (e) => self.skipWaiting());
             self.addEventListener('activate', (e) => self.clients.claim());
-            self.addEventListener('fetch', (e) => {});
+            self.addEventListener('fetch', (e) => {
+                e.respondWith(fetch(e.request).catch(() => new Response('Offline')));
+            });
         `);
         return;
     }
@@ -456,20 +794,20 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // Página Principal do Painel Autenticado
+    // Página Principal do Painel Autenticado (100% Responsiva Mobile / Tablet / Desktop)
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0f766e">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Saúdelab Bot">
     <link rel="manifest" href="/manifest.json">
-    <link rel="icon" type="image/png" href="/app-icon.png">
-    <link rel="apple-touch-icon" href="/app-icon.png">
+    <link rel="icon" type="image/png" href="/app-icon-192.png">
+    <link rel="apple-touch-icon" href="/app-icon-192.png">
     <title>Saúdelab Exames — Painel do Bot 24h</title>
     <style>
         :root {
@@ -482,103 +820,166 @@ const server = http.createServer(async (req, res) => {
             --border: #e2e8f0;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
+        html, body {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg);
             color: var(--text);
-            padding-bottom: 36px;
+            -webkit-text-size-adjust: 100%;
+        }
+        body {
+            padding-bottom: 90px;
         }
         header {
+            width: 100%;
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: #fff;
-            padding: 14px 18px;
+            padding: 12px 14px;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+        }
+        .header-inner {
+            max-width: 1120px;
+            margin: 0 auto;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+            gap: 10px;
+            flex-wrap: wrap;
         }
         .header-brand {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            min-width: 0;
+            flex: 1 1 auto;
         }
-        header img {
-            width: 40px;
-            height: 40px;
+        .header-brand img {
+            width: 38px;
+            height: 38px;
             border-radius: 10px;
             background: #fff;
+            flex-shrink: 0;
+        }
+        .header-title {
+            min-width: 0;
         }
         .header-title h1 {
-            font-size: 1.05rem;
+            font-size: 0.98rem;
             font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .header-title p {
-            font-size: 0.76rem;
+            font-size: 0.73rem;
             opacity: 0.9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .header-actions {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .btn-header-install {
+            background: #ffffff;
+            color: #0f766e;
+            border: none;
+            font-size: 0.76rem;
+            font-weight: 800;
+            padding: 7px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            white-space: nowrap;
         }
         .btn-logout {
-            background: rgba(255,255,255,0.16);
+            background: rgba(255, 255, 255, 0.16);
             color: #fff;
             text-decoration: none;
-            font-size: 0.78rem;
+            font-size: 0.76rem;
             font-weight: 600;
-            padding: 7px 12px;
+            padding: 7px 11px;
             border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.28);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            white-space: nowrap;
         }
         .container {
-            max-width: 1080px;
-            margin: 16px auto;
+            width: 100%;
+            max-width: 1120px;
+            margin: 14px auto;
             padding: 0 12px;
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: minmax(0, 1fr);
             gap: 14px;
         }
-        @media (min-width: 820px) {
-            .container { grid-template-columns: 370px 1fr; }
-            .full-width { grid-column: 1 / -1; }
+        @media (min-width: 860px) {
+            .container {
+                grid-template-columns: 380px minmax(0, 1fr);
+                padding: 0 16px;
+            }
+            .full-width {
+                grid-column: 1 / -1;
+            }
         }
         .card {
             background: var(--card);
             border-radius: 14px;
-            padding: 16px;
+            padding: 15px;
             box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
             border: 1px solid var(--border);
+            min-width: 0;
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden;
         }
-        .card h2 {
-            font-size: 0.95rem;
-            color: #0f172a;
-            margin-bottom: 12px;
+        .card-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .card-header h2 {
+            font-size: 0.95rem;
+            color: #0f172a;
+            font-weight: 700;
         }
         .badge {
             display: inline-block;
-            padding: 5px 11px;
+            padding: 5px 10px;
             border-radius: 999px;
-            font-size: 0.74rem;
+            font-size: 0.72rem;
             font-weight: 700;
+            max-width: 100%;
+            word-break: break-word;
+            text-align: center;
         }
         .badge-ok { background: #dcfce7; color: #166534; }
         .badge-warn { background: #fef9c3; color: #854d0e; }
         .info-row {
-            font-size: 0.84rem;
+            font-size: 0.83rem;
             margin: 8px 0;
             color: #334155;
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
+            align-items: center;
+            gap: 6px;
             border-bottom: 1px dashed #e2e8f0;
-            padding-bottom: 6px;
+            padding-bottom: 7px;
+        }
+        .info-row strong {
+            color: #0f172a;
+            word-break: break-word;
+            text-align: right;
         }
         .qr-wrapper {
             text-align: center;
@@ -589,9 +990,13 @@ const server = http.createServer(async (req, res) => {
             border: 1px dashed #cbd5e1;
         }
         .qr-wrapper img {
-            width: 230px;
-            height: 230px;
+            width: 100%;
+            max-width: 220px;
+            height: auto;
+            aspect-ratio: 1 / 1;
             border-radius: 8px;
+            display: block;
+            margin: 0 auto;
         }
         .btn-group {
             display: flex;
@@ -601,18 +1006,23 @@ const server = http.createServer(async (req, res) => {
         }
         .btn {
             width: 100%;
-            padding: 10px 12px;
-            border-radius: 9px;
-            font-size: 0.82rem;
+            padding: 11px 12px;
+            border-radius: 10px;
+            font-size: 0.83rem;
             font-weight: 700;
             cursor: pointer;
             border: none;
-            transition: opacity 0.2s;
+            text-align: center;
+            line-height: 1.3;
         }
-        .btn:hover { opacity: 0.92; }
         .btn-mode {
             background: #0f766e;
             color: #ffffff;
+        }
+        .btn-install-card {
+            background: #f0fdfa;
+            color: #0f766e;
+            border: 1.5px solid #99f6e4;
         }
         .btn-disconnect {
             background: #fee2e2;
@@ -623,67 +1033,118 @@ const server = http.createServer(async (req, res) => {
             background: #0f172a;
             color: #e2e8f0;
             font-family: 'Consolas', 'Courier New', monospace;
-            font-size: 0.77rem;
+            font-size: 0.76rem;
             line-height: 1.48;
-            height: 290px;
+            height: 280px;
             overflow-y: auto;
+            overflow-x: hidden;
             padding: 12px;
             border-radius: 10px;
+            width: 100%;
         }
         .log-line {
             padding: 3px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
             word-break: break-word;
+            overflow-wrap: anywhere;
         }
         .log-line.ok { color: #4ade80; }
         .log-line.warn { color: #facc15; }
         .log-line.info { color: #38bdf8; }
-        .table-wrap { overflow-x: auto; }
+
+        /* Tabelas Responsivas: Desktop = Tabela | Mobile = Cards Empilhados */
+        .table-wrap {
+            width: 100%;
+            overflow-x: auto;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.8rem;
+            font-size: 0.81rem;
         }
         th, td {
             text-align: left;
-            padding: 8px 6px;
+            padding: 9px 8px;
             border-bottom: 1px solid #f1f5f9;
+            word-break: break-word;
         }
         th {
             color: var(--muted);
             font-weight: 600;
-            font-size: 0.73rem;
+            font-size: 0.72rem;
             text-transform: uppercase;
+        }
+        @media (max-width: 680px) {
+            table, thead, tbody, th, td, tr {
+                display: block;
+                width: 100%;
+            }
+            thead tr {
+                display: none;
+            }
+            tbody tr.data-row {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                padding: 10px 12px;
+                margin-bottom: 10px;
+            }
+            tbody tr.data-row td {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                padding: 5px 0;
+                border-bottom: 1px dashed #e2e8f0;
+                text-align: right;
+            }
+            tbody tr.data-row td:last-child {
+                border-bottom: none;
+            }
+            tbody tr.data-row td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                font-size: 0.73rem;
+                color: #64748b;
+                text-transform: uppercase;
+                text-align: left;
+                flex-shrink: 0;
+            }
         }
         footer {
             text-align: center;
-            font-size: 0.75rem;
+            font-size: 0.74rem;
             color: var(--muted);
             margin-top: 18px;
+            padding: 0 12px;
         }
+        ${PWA_INSTALL_CSS}
     </style>
 </head>
 <body>
     <header>
-        <div class="header-brand">
-            <img src="/app-icon.png" alt="Saúdelab">
-            <div class="header-title">
-                <h1>Saúdelab Exames — Triagem 24h</h1>
-                <p>Painel de Controle, QR Code e Auditoria ao Vivo</p>
+        <div class="header-inner">
+            <div class="header-brand">
+                <img src="/app-icon-192.png" alt="Saúdelab">
+                <div class="header-title">
+                    <h1>Saúdelab Exames — Triagem 24h</h1>
+                    <p>Painel de Controle, QR Code e Auditoria ao Vivo</p>
+                </div>
             </div>
-        </div>
-        <div class="header-actions">
-            <a href="/logout" class="btn-logout">Sair</a>
+            <div class="header-actions">
+                <button type="button" class="btn-header-install" onclick="triggerInstallApp()">📲 Instalar App</button>
+                <a href="/logout" class="btn-logout">Sair</a>
+            </div>
         </div>
     </header>
 
     <div class="container">
         <!-- Card de Status + QR Code + Botões de Controle -->
         <div class="card">
-            <h2>
-                <span>Conexão WhatsApp</span>
+            <div class="card-header">
+                <h2>Conexão WhatsApp</h2>
                 <span id="connBadge" class="badge badge-warn">CARREGANDO...</span>
-            </h2>
+            </div>
             <div class="info-row">
                 <span>Número Conectado:</span>
                 <strong id="phoneText">-</strong>
@@ -702,7 +1163,10 @@ const server = http.createServer(async (req, res) => {
                 <button id="btnToggleMode" class="btn btn-mode" onclick="toggleOperationMode()">
                     Alternar Modo (Teste / Produção 24h)
                 </button>
-                <button class="btn btn-disconnect" onclick="disconnectWhatsApp()">
+                <button type="button" class="btn btn-install-card" onclick="triggerInstallApp()">
+                    📲 Instalar Aplicativo na Tela Inicial
+                </button>
+                <button type="button" class="btn btn-disconnect" onclick="disconnectWhatsApp()">
                     Desconectar / Trocar WhatsApp (Gerar QR Code)
                 </button>
             </div>
@@ -710,16 +1174,18 @@ const server = http.createServer(async (req, res) => {
 
         <!-- Card de Logs em Tempo Real -->
         <div class="card">
-            <h2>
-                <span>Logs de Atividade em Tempo Real</span>
-                <span style="font-size:0.72rem; color:#64748b; font-weight:normal;">Atualiza a cada 3s</span>
-            </h2>
+            <div class="card-header">
+                <h2>Logs de Atividade em Tempo Real</h2>
+                <span style="font-size:0.72rem; color:#64748b;">Atualiza a cada 3s</span>
+            </div>
             <div id="logBox" class="log-box">Carregando logs...</div>
         </div>
 
         <!-- Card de Sessões Ativas -->
         <div class="card full-width">
-            <h2>Conversas em Andamento / Pausadas para Recepcionista</h2>
+            <div class="card-header">
+                <h2>Conversas em Andamento / Pausadas para Recepcionista</h2>
+            </div>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -739,7 +1205,9 @@ const server = http.createServer(async (req, res) => {
 
         <!-- Card de Últimas Triagens Concluídas -->
         <div class="card full-width">
-            <h2>Últimas Triagens Concluídas</h2>
+            <div class="card-header">
+                <h2>Últimas Triagens Concluídas</h2>
+            </div>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -764,10 +1232,10 @@ const server = http.createServer(async (req, res) => {
         Criado por: Caio Araujo - Analista de TI | Build v${VERSION}
     </footer>
 
+    ${PWA_INSTALL_SNIPPET}
+
     <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
-        }
+        ${PWA_INSTALL_JS}
 
         let currentTestMode = true;
 
@@ -856,11 +1324,11 @@ const server = http.createServer(async (req, res) => {
                         const statusLabel = s.paused_for_human
                             ? '<span class="badge badge-ok">Com a Recepcionista</span>'
                             : '<span class="badge badge-warn">' + s.state + '</span>';
-                        return '<tr>'
-                            + '<td><b>' + (s.phone || '').split('@')[0] + '</b></td>'
-                            + '<td>' + statusLabel + '</td>'
-                            + '<td>' + (s.followup_count || 0) + '/' + (st.max_followups || 2) + '</td>'
-                            + '<td>' + (s.updated_at || '-') + '</td>'
+                        return '<tr class="data-row">'
+                            + '<td data-label="Cliente"><b>' + (s.phone || '').split('@')[0] + '</b></td>'
+                            + '<td data-label="Etapa Atual">' + statusLabel + '</td>'
+                            + '<td data-label="Avisos (5m)">' + (s.followup_count || 0) + '/' + (st.max_followups || 2) + '</td>'
+                            + '<td data-label="Última Interação">' + (s.updated_at || '-') + '</td>'
                             + '</tr>';
                     }).join('');
                 }
@@ -871,13 +1339,13 @@ const server = http.createServer(async (req, res) => {
                     tBody.innerHTML = '<tr><td colspan="6" style="color:#64748b;">Nenhuma triagem registrada ainda.</td></tr>';
                 } else {
                     tBody.innerHTML = triagens.map(t => {
-                        return '<tr>'
-                            + '<td>' + (t.created_at || '-') + '</td>'
-                            + '<td>' + (t.phone || '').split('@')[0] + '</td>'
-                            + '<td>' + (t.modality || '-') + '</td>'
-                            + '<td>' + (t.exams || '-') + '</td>'
-                            + '<td><b>' + (t.patient_name || '-') + '</b></td>'
-                            + '<td>' + (t.cpf_or_birth || '-') + '</td>'
+                        return '<tr class="data-row">'
+                            + '<td data-label="Data/Hora">' + (t.created_at || '-') + '</td>'
+                            + '<td data-label="WhatsApp">' + (t.phone || '').split('@')[0] + '</td>'
+                            + '<td data-label="Modalidade">' + (t.modality || '-') + '</td>'
+                            + '<td data-label="Exames">' + (t.exams || '-') + '</td>'
+                            + '<td data-label="Paciente"><b>' + (t.patient_name || '-') + '</b></td>'
+                            + '<td data-label="CPF / Nasc.">' + (t.cpf_or_birth || '-') + '</td>'
                             + '</tr>';
                     }).join('');
                 }
@@ -1001,7 +1469,7 @@ async function startBot() {
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['Saudelab Triagem', 'Chrome', '4.0.0'],
+        browser: ['Saudelab Triagem', 'Chrome', '4.1.0'],
         syncFullHistory: false,
         markOnlineOnConnect: false
     });
@@ -1040,7 +1508,6 @@ async function startBot() {
         }
     });
 
-    // Rastreia chamadas de voz/vídeo: só envia triagem se a chamada NÃO for atendida
     sock.ev.on('call', async (calls) => {
         for (const call of calls) {
             const callId = call.id;

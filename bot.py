@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "triagem.db")
 LOG_PATH = os.path.join(BASE_DIR, "triagem.log")

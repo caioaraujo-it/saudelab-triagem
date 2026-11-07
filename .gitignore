@@ -6,3 +6,4 @@ triagem.db-shm
 triagem.db-wal
 triagem.log
 .env
+
